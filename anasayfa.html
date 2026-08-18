@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>İzmir Barajları | 3D Açık Hava Galerisi</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="anasayfa.css">
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.webgpu.js",
+            "three/webgpu": "/node_modules/three/build/three.webgpu.js",
+            "three/tsl": "/node_modules/three/build/three.tsl.js",
+            "three/addons/": "/node_modules/three/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+
+<body>
+
+    <!-- THREE.JS SAHNE ALANI -->
+    <div id="three-bolumu"></div>
+
+    <!-- Galeri Başlığı & Dinamik Son Güncelleme Tarihi -->
+    <div class="gallery-ui">
+        <h1 class="gallery-title">İzmir Barajları</h1>
+        <p class="gallery-subtitle">3D Açık Hava Veri Galerisi</p>
+        <div class="date-selector">
+            <button id="gallery-update-date" class="gallery-date" type="button" aria-haspopup="true" aria-expanded="false">
+                <span id="gallery-update-date-label">Tarih Seçimi: Bugün</span>
+                <span class="date-selector-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div id="date-selector-popover" class="date-selector-popover" role="menu" aria-hidden="true">
+                <div class="date-selector-heading">Veri tarihini seçin</div>
+                <button class="date-mode-option active" type="button" data-date-mode="latest" role="menuitem">
+                    <span class="date-mode-dot"></span>
+                    <span><strong>Bugün</strong><small id="latest-date-option-label">Yükleniyor…</small></span>
+                </button>
+                <button class="date-mode-option" type="button" data-date-mode="last-year" role="menuitem">
+                    <span class="date-mode-dot"></span>
+                    <span><strong>Geçen Sene Bugün</strong><small id="last-year-date-option-label">Yükleniyor…</small></span>
+                </button>
+                <button class="date-mode-option" type="button" data-date-mode="compare" role="menuitem">
+                    <span class="date-mode-dot"></span>
+                    <span><strong>Karşılaştırma</strong><small id="compare-date-option-label">Yükleniyor…</small></span>
+                </button>
+                <div id="date-selector-status" class="date-selector-status" aria-live="polite"></div>
+            </div>
+            <div class="data-freshness" aria-live="polite">
+                <span id="data-source-badge" class="data-source-badge">Veri kontrol ediliyor</span>
+                <span>Son Veri Güncellemesi: <strong id="latest-data-date-label">—</strong></span>
+                <span id="used-data-date-label" class="used-data-date"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- GÖRÜNÜMÜ SIFIRLA BUTONU -->
+    <button id="reset-view-btn" class="reset-view-btn" title="Başlangıç Açısına Dön">
+        <span class="reset-icon">↺</span> Görünümü Sıfırla
+    </button>
+
+    <!-- Alt Bilgilendirme İpucu -->
+    <div class="gallery-controls-hint">
+        <span>💡 Detaylı analiz için baraja tıklayın • 360° gezinti ve kuşbakışı serbesttir</span>
+    </div>
+
+    <!-- DOLULUK SEVİYESİ RENK LEJANTI (LEGEND) -->
+    <div class="occupancy-legend">
+        <div class="legend-header">Doluluk Seviyesi</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-dot" style="background-color: #138fe8;"></span>
+                <span class="legend-range">%70+</span>
+                <span class="legend-label">Yüksek</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot" style="background-color: #00b6c7;"></span>
+                <span class="legend-range">%55–69</span>
+                <span class="legend-label">Orta–İyi</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot" style="background-color: #d59b00;"></span>
+                <span class="legend-range">%40–54</span>
+                <span class="legend-label">Orta</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot" style="background-color: #c92f35;"></span>
+                <span class="legend-range">&lt;%40</span>
+                <span class="legend-label">Kritik</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- =================================================
+         BARAJ DETAY BİLGİ PANELİ (REUSABLE MODAL)
+    ================================================== -->
+    <div id="dam-modal-backdrop" class="modal-backdrop">
+        <div id="dam-modal-card" class="modal-card">
+
+            <!-- Arka Plan Fotoğrafı & Gradient Katmanı -->
+            <div id="modal-bg-image" class="modal-bg-image"></div>
+            <div class="modal-gradient-overlay"></div>
+
+            <!-- Kapatma Butonu -->
+            <button id="modal-close-btn" class="modal-close-btn" aria-label="Kapat">✕</button>
+
+            <!-- Panel İçeriği -->
+            <div class="modal-layout">
+            <div class="modal-content">
+
+                <!-- Başlık ve Konum -->
+                <div class="modal-header">
+                    <span id="modal-dam-status-badge" class="status-badge">
+                        <span class="status-dot"></span>
+                        <span id="modal-dam-status-text">Doluluk Durumu</span>
+                    </span>
+                    <h2 id="modal-dam-name" class="modal-title">Tahtalı Barajı</h2>
+                    <p id="modal-dam-location" class="modal-location">Menderes, İzmir</p>
+                </div>
+
+                <!-- Doluluk Progress Bar -->
+                <div class="modal-progress-section">
+                    <div class="progress-labels">
+                        <span>Doluluk Oranı</span>
+                        <span id="modal-progress-percentage" class="progress-val">%53.04</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="modal-progress-bar" class="progress-fill"></div>
+                    </div>
+                </div>
+
+                <div id="modal-comparison-summary" class="modal-comparison-summary" hidden>
+                    <div class="comparison-summary-item">
+                        <span id="modal-compare-previous-date" class="comparison-summary-label">—</span>
+                        <strong id="modal-compare-previous-value">—</strong>
+                    </div>
+                    <div class="comparison-summary-item">
+                        <span id="modal-compare-current-date" class="comparison-summary-label">—</span>
+                        <strong id="modal-compare-current-value">—</strong>
+                    </div>
+                    <div class="comparison-summary-item comparison-summary-change">
+                        <span class="comparison-summary-label">Değişim</span>
+                        <strong id="modal-compare-change">—</strong>
+                    </div>
+                </div>
+
+                <!-- 3'lü İstatistik Izgarası -->
+                <div class="modal-stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-label">DOLULUK ORANI</span>
+                        <span id="modal-stat-occupancy" class="stat-value highlight">%53.04</span>
+                    </div>
+
+                    <div class="stat-card">
+                        <span class="stat-label">TOPLAM KAPASİTE</span>
+                        <span id="modal-stat-capacity" class="stat-value">306.650.000 m³</span>
+                    </div>
+
+                    <div class="stat-card">
+                        <span class="stat-label">GÜNCEL SU HACMİ</span>
+                        <span id="modal-stat-volume" class="stat-value">162.647.160 m³</span>
+                    </div>
+                </div>
+
+                <!-- Alt Detay Bilgileri & Son Ölçüm -->
+                <div class="modal-footer-info">
+                    <div class="info-row">
+                        <span class="info-tag">Son Veri Ölçümü:</span>
+                        <span id="modal-stat-date" class="info-data">—</span>
+                    </div>
+                    <p id="modal-dam-description" class="modal-description">
+                        İzmir'in temel içme suyu kaynaklarından biridir.
+                    </p>
+                </div>
+
+            </div>
+            <aside class="modal-chart-panel" aria-label="30 günlük doluluk grafiği">
+                <div class="modal-chart-header">
+                    <div>
+                        <span class="modal-chart-eyebrow">DOLULUK EĞİLİMİ</span>
+                        <h3>Son 30 Gün</h3>
+                    </div>
+                    <span id="modal-chart-range" class="modal-chart-range">—</span>
+                </div>
+                <div id="modal-chart-container" class="modal-chart-container">
+                    <div id="modal-chart-loading" class="modal-chart-state">Grafik yükleniyor…</div>
+                    <svg id="modal-trend-chart" class="modal-trend-chart" role="img" aria-label="Baraj doluluk oranı çizgi grafiği"></svg>
+                    <div id="modal-chart-tooltip" class="modal-chart-tooltip"></div>
+                </div>
+                <div class="modal-chart-footer">
+                    <span><i class="chart-legend-line"></i> Doluluk oranı</span>
+                    <span id="modal-chart-latest-value">—</span>
+                </div>
+            </aside>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="anasayfa.js"></script>
+</body>
+
+</html>
