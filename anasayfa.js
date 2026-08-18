@@ -1818,6 +1818,40 @@ function createDamSpillwayNormalTexture() {
 
 const damSpillwayNormalTexture = createDamSpillwayNormalTexture();
 
+function createDamSpillwayDepthTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 512;
+    const ctx = canvas.getContext("2d");
+
+    // Koyu kenarlar su perdesini betonun önünde hacimli gösterirken açık merkez,
+    // mevcut stilize turkuaz rengin kaybolmasını önler.
+    const edgeShade = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    edgeShade.addColorStop(0, "rgba(7, 58, 82, 0.96)");
+    edgeShade.addColorStop(0.18, "rgba(13, 91, 118, 0.82)");
+    edgeShade.addColorStop(0.50, "rgba(39, 142, 168, 0.62)");
+    edgeShade.addColorStop(0.82, "rgba(12, 86, 112, 0.84)");
+    edgeShade.addColorStop(1, "rgba(6, 51, 75, 0.97)");
+    ctx.fillStyle = edgeShade;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const fallShade = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    fallShade.addColorStop(0, "rgba(8, 42, 61, 0.04)");
+    fallShade.addColorStop(0.58, "rgba(8, 42, 61, 0.13)");
+    fallShade.addColorStop(1, "rgba(4, 30, 48, 0.34)");
+    ctx.fillStyle = fallShade;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 1.35);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
+const damSpillwayDepthTexture = createDamSpillwayDepthTexture();
+
 const damSpillwayMat = new THREE.MeshStandardMaterial({
     map: damSpillwayTexture,
     normalMap: damSpillwayNormalTexture,
@@ -1945,9 +1979,35 @@ const damImpactFoamMat = new THREE.MeshBasicMaterial({
     depthWrite: false,
     side: THREE.DoubleSide
 });
+function createDamSplashTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    const gradient = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+    gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+    gradient.addColorStop(0.32, "rgba(226,248,255,0.72)");
+    gradient.addColorStop(1, "rgba(205,239,250,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(canvas);
+}
+
+const damSplashMat = new THREE.PointsMaterial({
+    map: createDamSplashTexture(),
+    color: 0xeafaff,
+    transparent: true,
+    opacity: 0.62,
+    size: 0.34,
+    sizeAttenuation: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+});
 const damSpillwayBodyGeometry = buildDamSpillwayGeometry(3.72, -0.025);
+const damSpillwayDepthGeometry = buildDamSpillwayGeometry(3.92, -0.105);
 const damSpillwayGeometry = buildDamSpillwayGeometry(3.52, 0.055);
 const damSpillwayFoamGeometry = buildDamSpillwayGeometry(2.65, 0.105);
+const damSpillwayHighlightGeometry = buildDamSpillwayGeometry(1.58, 0.145, 0.18);
 const damSpillwayEdgeLeftGeometry = buildDamSpillwayGeometry(0.34, 0.115, -1.58);
 const damSpillwayEdgeRightGeometry = buildDamSpillwayGeometry(0.34, 0.115, 1.58);
 const damSpillwaySegmentIndices = [2, 4, 7, 9];
@@ -1969,6 +2029,10 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     const foamTexture = damSpillwayFoamTexture.clone();
     foamTexture.offset.y = flowIndex * 0.193;
     foamTexture.needsUpdate = true;
+    const highlightTexture = damSpillwayFoamTexture.clone();
+    highlightTexture.repeat.set(1.25, 2.75);
+    highlightTexture.offset.set(0.08 + flowIndex * 0.11, flowIndex * 0.237);
+    highlightTexture.needsUpdate = true;
     const normalTexture = damSpillwayNormalTexture.clone();
     normalTexture.offset.y = flowIndex * 0.071;
     normalTexture.needsUpdate = true;
@@ -1978,11 +2042,33 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     waterMaterial.normalMap = normalTexture;
     const foamMaterial = damSpillwayFoamMat.clone();
     foamMaterial.map = foamTexture;
+    const highlightMaterial = damSpillwayFoamMat.clone();
+    highlightMaterial.map = highlightTexture;
+    highlightMaterial.color.setHex(0xf3fcff);
+    highlightMaterial.opacity = 0.34;
+    highlightMaterial.blending = THREE.AdditiveBlending;
 
     const bodyMaterial = waterMaterial.clone();
-    bodyMaterial.color.setHex(0x38aecd);
-    bodyMaterial.opacity = 0.84;
-    bodyMaterial.roughness = 0.32;
+    bodyMaterial.color.setHex(0x2f9fbd);
+    bodyMaterial.opacity = 0.82;
+    bodyMaterial.roughness = 0.36;
+    bodyMaterial.normalScale.set(0.18, 0.54);
+
+    const depthMaterial = new THREE.MeshStandardMaterial({
+        map: damSpillwayDepthTexture,
+        normalMap: normalTexture,
+        normalScale: new THREE.Vector2(0.12, 0.38),
+        color: 0x3a9bb3,
+        transparent: true,
+        opacity: 0.56,
+        roughness: 0.48,
+        metalness: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+
+    const depthLayer = new THREE.Mesh(damSpillwayDepthGeometry, depthMaterial);
+    depthLayer.renderOrder = 4;
 
     const waterBody = new THREE.Mesh(damSpillwayBodyGeometry, bodyMaterial);
     waterBody.renderOrder = 5;
@@ -1991,20 +2077,22 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     waterSheet.renderOrder = 6;
     const foamVeins = new THREE.Mesh(damSpillwayFoamGeometry, foamMaterial);
     foamVeins.renderOrder = 7;
+    const flowHighlight = new THREE.Mesh(damSpillwayHighlightGeometry, highlightMaterial);
+    flowHighlight.renderOrder = 8;
     const leftEdgeFoam = new THREE.Mesh(damSpillwayEdgeLeftGeometry, foamMaterial);
     const rightEdgeFoam = new THREE.Mesh(damSpillwayEdgeRightGeometry, foamMaterial);
     leftEdgeFoam.renderOrder = 7;
     rightEdgeFoam.renderOrder = 7;
 
     const impactFoamMaterial = damImpactFoamMat.clone();
-    const impactFoam = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 4.8), impactFoamMaterial);
+    const impactFoam = new THREE.Mesh(new THREE.PlaneGeometry(6.9, 5.15), impactFoamMaterial);
     impactFoam.rotation.x = -Math.PI / 2;
     impactFoam.position.set(0, -1.08, 11.72);
     impactFoam.renderOrder = 8;
 
     const mixingFoamMaterial = impactFoamMaterial.clone();
     mixingFoamMaterial.opacity = 0.52;
-    const mixingFoam = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 6.6), mixingFoamMaterial);
+    const mixingFoam = new THREE.Mesh(new THREE.PlaneGeometry(8.1, 7.15), mixingFoamMaterial);
     mixingFoam.rotation.x = -Math.PI / 2;
     mixingFoam.position.set(0, -1.10, 13.72);
     mixingFoam.renderOrder = 7;
@@ -2015,20 +2103,52 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     impactSpray.position.set(0, -0.18, 10.86);
     impactSpray.renderOrder = 9;
 
-    spillway.add(waterBody, waterSheet, foamVeins, leftEdgeFoam, rightEdgeFoam, mixingFoam, impactFoam, impactSpray);
+    // Her savakta az sayıda, kısa ömürlü parçacık çarpma enerjisini destekler.
+    // Düşük adet ve ortak materyal, efektin sakin kalmasını ve performansı korur.
+    const splashCount = 12;
+    const splashPositions = new Float32Array(splashCount * 3);
+    const splashData = [];
+    const splashRandom = damWaterRandom(12031 + flowIndex * 977);
+    for (let i = 0; i < splashCount; i++) {
+        splashData.push({
+            age: splashRandom() * 0.9,
+            life: 0.62 + splashRandom() * 0.42,
+            startX: (splashRandom() - 0.5) * 2.5,
+            startZ: 10.82 + (splashRandom() - 0.5) * 1.25,
+            velocityX: (splashRandom() - 0.5) * 1.15,
+            velocityY: 1.25 + splashRandom() * 1.35,
+            velocityZ: 0.45 + splashRandom() * 0.85
+        });
+    }
+    const splashGeometry = new THREE.BufferGeometry();
+    splashGeometry.setAttribute("position", new THREE.BufferAttribute(splashPositions, 3));
+    splashGeometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(splashCount * 2), 2));
+    const splashPoints = new THREE.Points(splashGeometry, damSplashMat);
+    splashPoints.renderOrder = 10;
+
+    spillway.add(depthLayer, waterBody, waterSheet, foamVeins, flowHighlight, leftEdgeFoam, rightEdgeFoam, mixingFoam, impactFoam, impactSpray, splashPoints);
     distantDamGroup.add(spillway);
     damSpillwayFlows.push({
         waterTexture,
         foamTexture,
+        highlightTexture,
         normalTexture,
+        depthLayer,
         waterSheet,
         waterBody,
+        foamVeins,
+        flowHighlight,
+        leftEdgeFoam,
+        rightEdgeFoam,
         impactFoam,
         mixingFoam,
         impactSpray,
+        splashGeometry,
+        splashData,
         phase: flowIndex * 0.83,
-        flowSpeed: 1.34 + flowIndex * 0.045,
-        foamSpeed: 1.78 + flowIndex * 0.06
+        flowSpeed: 1.52 + flowIndex * 0.05,
+        foamSpeed: 2.02 + flowIndex * 0.065,
+        highlightSpeed: 2.34 + flowIndex * 0.07
     });
 }
 
@@ -4354,24 +4474,52 @@ function animate(timestamp) {
     for (const flow of damSpillwayFlows) {
         flow.waterTexture.offset.y = (flow.waterTexture.offset.y - delta * flow.flowSpeed) % 1;
         flow.foamTexture.offset.y = (flow.foamTexture.offset.y - delta * flow.foamSpeed) % 1;
-        flow.normalTexture.offset.y = (flow.normalTexture.offset.y - delta * 0.58) % 1;
-        flow.normalTexture.offset.x = Math.sin(elapsed * 0.55 + flow.phase) * 0.045;
+        flow.highlightTexture.offset.y = (flow.highlightTexture.offset.y - delta * flow.highlightSpeed) % 1;
+        flow.highlightTexture.offset.x = 0.08 + Math.sin(elapsed * 0.72 + flow.phase) * 0.035;
+        flow.normalTexture.offset.y = (flow.normalTexture.offset.y - delta * 0.72) % 1;
+        flow.normalTexture.offset.x = Math.sin(elapsed * 0.68 + flow.phase) * 0.055;
 
         // Ana perde daima yukarıdan aşağı akar; çok küçük genişlik ve opaklık
         // değişimleri yalnızca doğal yüzey basıncı/türbülansı hissi verir.
-        const surfacePulse = Math.sin(elapsed * 1.35 + flow.phase);
-        flow.waterSheet.scale.x = 1.0 + surfacePulse * 0.012;
-        flow.waterBody.scale.x = 1.0 - surfacePulse * 0.007;
-        flow.waterSheet.material.opacity = 0.935 + surfacePulse * 0.022;
+        const surfacePulse = Math.sin(elapsed * 1.55 + flow.phase);
+        const fineTurbulence = Math.sin(elapsed * 3.1 + flow.phase * 1.7);
+        flow.waterSheet.position.x = surfacePulse * 0.025 + fineTurbulence * 0.009;
+        flow.waterSheet.scale.x = 1.0 + surfacePulse * 0.016;
+        flow.depthLayer.position.x = -surfacePulse * 0.014;
+        flow.depthLayer.scale.x = 1.0 - fineTurbulence * 0.008;
+        flow.depthLayer.material.opacity = 0.54 + surfacePulse * 0.025;
+        flow.waterBody.scale.x = 1.0 - surfacePulse * 0.009;
+        flow.waterSheet.material.opacity = 0.93 + surfacePulse * 0.023 + fineTurbulence * 0.008;
+        flow.foamVeins.position.x = -surfacePulse * 0.018;
+        flow.foamVeins.material.opacity = 0.73 + fineTurbulence * 0.055;
+        flow.flowHighlight.position.x = Math.sin(elapsed * 0.92 + flow.phase * 1.3) * 0.12;
+        flow.flowHighlight.material.opacity = 0.29 + Math.abs(fineTurbulence) * 0.10;
+        flow.leftEdgeFoam.scale.x = 0.94 + Math.sin(elapsed * 1.8 + flow.phase) * 0.07;
+        flow.rightEdgeFoam.scale.x = 0.94 + Math.cos(elapsed * 1.72 + flow.phase) * 0.07;
 
-        const foamPulse = Math.sin(elapsed * 2.15 + flow.phase);
-        flow.impactFoam.scale.set(1.0 + foamPulse * 0.09, 1.0 - foamPulse * 0.055, 1.0);
-        flow.impactFoam.material.opacity = 0.82 + foamPulse * 0.09;
-        flow.mixingFoam.scale.set(1.0 - foamPulse * 0.045, 1.0 + foamPulse * 0.075, 1.0);
+        const foamPulse = Math.sin(elapsed * 2.28 + flow.phase);
+        const foamRipple = Math.sin(elapsed * 3.65 + flow.phase * 1.4);
+        flow.impactFoam.scale.set(1.04 + foamPulse * 0.085, 1.03 - foamPulse * 0.05, 1.0);
+        flow.impactFoam.rotation.z = Math.sin(elapsed * 0.52 + flow.phase) * 0.035;
+        flow.impactFoam.material.opacity = 0.86 + foamPulse * 0.075;
+        flow.mixingFoam.scale.set(1.03 - foamPulse * 0.04, 1.04 + foamPulse * 0.068, 1.0);
         flow.mixingFoam.rotation.z = Math.sin(elapsed * 0.38 + flow.phase) * 0.055;
-        flow.mixingFoam.material.opacity = 0.48 + foamPulse * 0.07;
-        flow.impactSpray.scale.set(1.0 + foamPulse * 0.08, 1.0 + Math.abs(foamPulse) * 0.10, 1.0);
-        flow.impactSpray.material.opacity = 0.54 + Math.abs(foamPulse) * 0.15;
+        flow.mixingFoam.material.opacity = 0.54 + foamPulse * 0.065 + foamRipple * 0.025;
+        flow.impactSpray.scale.set(1.02 + foamPulse * 0.075, 1.02 + Math.abs(foamPulse) * 0.11, 1.0);
+        flow.impactSpray.material.opacity = 0.57 + Math.abs(foamPulse) * 0.14;
+
+        const splashPositions = flow.splashGeometry.attributes.position;
+        for (let i = 0; i < flow.splashData.length; i++) {
+            const splash = flow.splashData[i];
+            splash.age += delta;
+            if (splash.age >= splash.life) splash.age %= splash.life;
+            const age = splash.age;
+            const x = splash.startX + splash.velocityX * age;
+            const y = -0.96 + splash.velocityY * age - 2.35 * age * age;
+            const z = splash.startZ + splash.velocityZ * age;
+            splashPositions.setXYZ(i, x, Math.max(-1.04, y), z);
+        }
+        splashPositions.needsUpdate = true;
     }
 
     // Etiketlerin Kamera Uzaklığına Göre Akıllı Ölçeklenmesi (Çakışmayı Önler)
