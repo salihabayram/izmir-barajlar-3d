@@ -706,37 +706,160 @@ function createConnectedRidgeLayer({ z, width, depth, height, seed, lowColor, hi
     return ridge;
 }
 
-// En yakın sırt barajın gerisinde başlar; betonun önüne taşmadan arka dağ olur.
-createConnectedRidgeLayer({ z: -145, width: 280, depth: 38, height: 16.5, seed: 0.8, lowColor: 0x557b49, highColor: 0x416949 });
-createConnectedRidgeLayer({ z: -166, width: 320, depth: 66, height: 12.5, seed: 2.4, lowColor: 0x496e58, highColor: 0x3a5f5b });
-createConnectedRidgeLayer({ z: -220, width: 360, depth: 80, height: 9.5, seed: 4.7, lowColor: 0x557274, highColor: 0x45636b });
+// Başlangıç kamerasında rezervuarı sağdan ve soldan doğal biçimde çerçeveleyen
+// geniş yan tepeler. Merkezleri kıyının dışında kalır; yalnızca iç yamaçları
+// kadraja girerek platform ve baraj görüşünü açık tutar.
+const sideHillConfigs = Object.freeze([
+    // Ön rezervuar görünümünü çerçeveleyen ilk iki büyük tepe korunur.
+    { x: -168, z: -108, radiusX: 98, radiusZ: 88, height: 20.5, seed: 1.25, treeCount: 5, shrubCount: 3 },
+    { x: 182, z: -91, radiusX: 92, radiusZ: 92, height: 22.0, seed: 2.05, treeCount: 5, shrubCount: 3 },
 
-// Orbit kamerasının erişebildiği alanın dışında kalan arka çevre halkası.
-// Geniş taban ve düşük frekanslı omuzlar, kamera döndüğünde piramit/koni
-// görünümü yerine kesintisiz bir tepe sırası verir.
-const rearRidgeConfigs = [
-    { z: 154, width: 300, depth: 56, height: 9.5, seed: 1.35, lowColor: 0x557b49, highColor: 0x416949 },
-    { z: 210, width: 360, depth: 76, height: 12.5, seed: 3.15, lowColor: 0x496e58, highColor: 0x3a5f5b }
-];
-rearRidgeConfigs.forEach(createConnectedRidgeLayer);
+    // Karşı çapraz açıda iki büyük tepe arasında kalan boş geçiş.
+    { x: -72, z: -170, radiusX: 88, radiusZ: 76, height: 14.0, seed: 2.30, treeCount: 4, shrubCount: 2 },
+    { x: 0, z: -184, radiusX: 102, radiusZ: 82, height: 18.2, seed: 2.55, treeCount: 5, shrubCount: 2 },
+    { x: 98, z: -168, radiusX: 78, radiusZ: 74, height: 15.0, seed: 2.80, treeCount: 4, shrubCount: 2 },
 
-function getRearRidgeHeight(x, z) {
-    let heightAtPoint = 0;
-    for (const ridge of rearRidgeConfigs) {
-        const localZ = z - ridge.z;
-        const v = localZ / ridge.depth + 0.5;
-        if (v <= 0 || v >= 1 || Math.abs(x) > ridge.width * 0.5) continue;
-        const crossSection = Math.pow(Math.sin(v * Math.PI), 1.35);
-        const broadShoulders =
-            0.86 +
-            Math.sin(x * 0.018 + ridge.seed) * 0.12 +
-            Math.sin(x * 0.038 - ridge.seed * 0.7) * 0.055 +
-            Math.cos(x * 0.009 + ridge.seed * 1.8) * 0.08;
-        const detail = Math.sin(x * 0.055 + ridge.seed * 2.1) * ridge.height * 0.035;
-        heightAtPoint = Math.max(heightAtPoint, crossSection * (ridge.height * broadShoulders + detail));
-    }
-    return Math.max(0, heightAtPoint);
+    // Referans açısındaki sol boşluk: örtüşen 7 farklı tepe.
+    { x: -205, z: 160, radiusX: 58, radiusZ: 72, height: 10.5, seed: 3.10, treeCount: 3, shrubCount: 1 },
+    { x: -173, z: 170, radiusX: 62, radiusZ: 76, height: 16.0, seed: 3.75, treeCount: 4, shrubCount: 2 },
+    { x: -142, z: 151, radiusX: 56, radiusZ: 68, height: 9.6, seed: 4.40, treeCount: 3, shrubCount: 1 },
+    { x: -113, z: 177, radiusX: 65, radiusZ: 80, height: 17.5, seed: 5.05, treeCount: 4, shrubCount: 2 },
+    { x: -85, z: 155, radiusX: 53, radiusZ: 66, height: 11.8, seed: 5.70, treeCount: 3, shrubCount: 1 },
+    { x: -59, z: 179, radiusX: 56, radiusZ: 72, height: 14.2, seed: 6.35, treeCount: 4, shrubCount: 2 },
+    { x: -34, z: 158, radiusX: 48, radiusZ: 62, height: 8.4, seed: 7.00, treeCount: 2, shrubCount: 1 },
+
+    // Sağ boşluk aynı sayıda fakat farklı yükseklik ritminde tamamlanır.
+    { x: 35, z: 165, radiusX: 49, radiusZ: 64, height: 9.4, seed: 7.65, treeCount: 2, shrubCount: 1 },
+    { x: 62, z: 181, radiusX: 56, radiusZ: 72, height: 14.8, seed: 8.30, treeCount: 4, shrubCount: 2 },
+    { x: 91, z: 156, radiusX: 54, radiusZ: 68, height: 10.8, seed: 8.95, treeCount: 3, shrubCount: 1 },
+    { x: 120, z: 178, radiusX: 65, radiusZ: 80, height: 18.0, seed: 9.60, treeCount: 4, shrubCount: 2 },
+    { x: 149, z: 153, radiusX: 57, radiusZ: 69, height: 10.2, seed: 10.25, treeCount: 3, shrubCount: 1 },
+    { x: 179, z: 172, radiusX: 63, radiusZ: 76, height: 16.4, seed: 10.90, treeCount: 4, shrubCount: 2 },
+    { x: 211, z: 159, radiusX: 60, radiusZ: 72, height: 12.0, seed: 11.55, treeCount: 3, shrubCount: 1 },
+
+    // İki yan açıdaki düz orta horizon boşluğunu dolduran ikinci, alçak sıra.
+    // Bu profiller yeni zincirin parçasıdır; eski mavi rear-ridge katmanı değildir.
+    { x: -92, z: 232, radiusX: 82, radiusZ: 68, height: 11.6, seed: 12.20, treeCount: 4, shrubCount: 2 },
+    { x: 0, z: 242, radiusX: 94, radiusZ: 74, height: 14.0, seed: 12.85, treeCount: 5, shrubCount: 2 },
+    { x: 96, z: 231, radiusX: 84, radiusZ: 70, height: 12.4, seed: 13.50, treeCount: 4, shrubCount: 2 },
+
+    // Platform boyunca bakılan doğu/batı yönlerindeki iki düz koridor.
+    { x: -232, z: -68, radiusX: 70, radiusZ: 64, height: 11.8, seed: 14.15, treeCount: 3, shrubCount: 1 },
+    { x: -246, z: 0, radiusX: 80, radiusZ: 72, height: 16.2, seed: 14.80, treeCount: 4, shrubCount: 2 },
+    { x: -230, z: 70, radiusX: 70, radiusZ: 66, height: 10.6, seed: 15.45, treeCount: 3, shrubCount: 1 },
+    { x: 234, z: -66, radiusX: 72, radiusZ: 64, height: 12.6, seed: 16.10, treeCount: 3, shrubCount: 1 },
+    { x: 248, z: 2, radiusX: 82, radiusZ: 74, height: 17.0, seed: 16.75, treeCount: 4, shrubCount: 2 },
+    { x: 232, z: 72, radiusX: 72, radiusZ: 66, height: 11.2, seed: 17.40, treeCount: 3, shrubCount: 1 }
+]);
+
+function getSideHillRise(config, x, z) {
+    const dx = (x - config.x) / config.radiusX;
+    const dz = (z - config.z) / config.radiusZ;
+    const distance = Math.hypot(dx, dz);
+    if (distance >= 1) return 0;
+
+    const angle = Math.atan2(dz, dx);
+    const irregularEdge = 1 + Math.sin(angle * 5 + config.seed) * 0.035;
+    const normalizedDistance = distance / irregularEdge;
+    if (normalizedDistance >= 1) return 0;
+
+    const t = 1 - normalizedDistance;
+    const smoothDome = t * t * (3 - 2 * t);
+    const broadVariation =
+        0.93
+        + Math.sin((x + z) * 0.026 + config.seed) * 0.055
+        + Math.cos(x * 0.041 - z * 0.018 + config.seed) * 0.035;
+    return Math.max(0, config.height * Math.pow(smoothDome, 0.82) * broadVariation);
 }
+
+function getSideHillSurfaceHeight(x, z) {
+    const baseHeight = getMountainHeight(x, z);
+    let combinedRise = 0;
+    for (const config of sideHillConfigs) {
+        combinedRise = Math.max(combinedRise, getSideHillRise(config, x, z));
+    }
+    return baseHeight + combinedRise;
+}
+
+function getCombinedSideHillRise(x, z) {
+    let rise = 0;
+    for (const config of sideHillConfigs) {
+        rise = Math.max(rise, getSideHillRise(config, x, z));
+    }
+    return rise;
+}
+
+function createSideHillTerrain() {
+    const minX = Math.min(...sideHillConfigs.map(config => config.x - config.radiusX));
+    const maxX = Math.max(...sideHillConfigs.map(config => config.x + config.radiusX));
+    const minZ = Math.min(...sideHillConfigs.map(config => config.z - config.radiusZ));
+    const maxZ = Math.max(...sideHillConfigs.map(config => config.z + config.radiusZ));
+    const segmentsX = 124;
+    const segmentsZ = 112;
+    const vertices = [];
+    const colors = [];
+    const indices = [];
+    const baseLow = new THREE.Color(0x587f36);
+    const baseMid = new THREE.Color(0x3f7040);
+    const hillLow = new THREE.Color(0x4d7835);
+    const hillHigh = new THREE.Color(0x294f32);
+
+    for (let iz = 0; iz <= segmentsZ; iz++) {
+        const worldZ = THREE.MathUtils.lerp(minZ, maxZ, iz / segmentsZ);
+        for (let ix = 0; ix <= segmentsX; ix++) {
+            const worldX = THREE.MathUtils.lerp(minX, maxX, ix / segmentsX);
+            const baseHeight = getMountainHeight(worldX, worldZ);
+            const rise = getCombinedSideHillRise(worldX, worldZ);
+            vertices.push(worldX, baseHeight + rise + 0.035, worldZ);
+
+            const baseTone = baseLow.clone().lerp(baseMid, THREE.MathUtils.clamp(baseHeight / 18, 0, 1));
+            const hillTone = hillLow.clone().lerp(hillHigh, THREE.MathUtils.clamp(rise / 20.0, 0, 1));
+            const blend = THREE.MathUtils.smoothstep(rise, 0.0, 2.2);
+            const tone = baseTone.lerp(hillTone, blend);
+            tone.offsetHSL(0, 0, Math.sin(worldX * 0.025 + worldZ * 0.019) * 0.012);
+            colors.push(tone.r, tone.g, tone.b);
+        }
+    }
+
+    const stride = segmentsX + 1;
+    for (let iz = 0; iz < segmentsZ; iz++) {
+        for (let ix = 0; ix < segmentsX; ix++) {
+            const centerX = THREE.MathUtils.lerp(minX, maxX, (ix + 0.5) / segmentsX);
+            const centerZ = THREE.MathUtils.lerp(minZ, maxZ, (iz + 0.5) / segmentsZ);
+            if (getCombinedSideHillRise(centerX, centerZ) <= 0.01) continue;
+            const a = iz * stride + ix;
+            const b = a + 1;
+            const c = a + stride;
+            const d = c + 1;
+            indices.push(a, c, b, b, c, d);
+        }
+    }
+
+    let geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry = carveDamClearance(geometry, 0, 0, 1.1, 1.1);
+    geometry.computeVertexNormals();
+
+    const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        vertexColors: true,
+        roughness: 0.94,
+        metalness: 0,
+        flatShading: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+    });
+    const hill = new THREE.Mesh(geometry, material);
+    hill.receiveShadow = true;
+    hill.castShadow = false;
+    layeredMountainGroup.add(hill);
+    return hill;
+}
+
+createSideHillTerrain();
 
 // ======================================================
 // 11. BİTKİ / ÇALI CLEAR-ZONE KONTROLÜ
@@ -1208,28 +1331,32 @@ while (treesPlaced < TREE_COUNT && treeAttempts < 5000) {
     }
 }
 
-// Yeni arka sırtlarda, kameranın maksimum orbit yarıçapının dışında kalan
-// seyrek ve yoğun karışık ağaç kümeleri. Mevcut ağaç LOD/material sistemi
-// aynen kullanılır.
-const rearMountainTreeClusters = [
-    { x: -108, z: 148, count: 8, radiusX: 27, radiusZ: 12 },
-    { x: -28, z: 160, count: 6, radiusX: 22, radiusZ: 10 },
-    { x: 55, z: 151, count: 9, radiusX: 29, radiusZ: 12 },
-    { x: 126, z: 169, count: 6, radiusX: 22, radiusZ: 10 },
-    { x: -68, z: 209, count: 6, radiusX: 30, radiusZ: 12 },
-    { x: 88, z: 215, count: 7, radiusX: 31, radiusZ: 13 }
-];
+// Yan tepelerde bitki örtüsü iç yamaçlara doğru yoğunlaşır. Mevcut LOD,
+// koyu yeşil foliage materyalleri ve rüzgâr animasyonu aynen kullanılır.
+sideHillConfigs.forEach((hill, hillIndex) => {
+    const inwardDirection = hill.x < 0 ? 1 : -1;
 
-rearMountainTreeClusters.forEach((cluster, clusterIndex) => {
-    for (let i = 0; i < cluster.count; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = Math.sqrt(Math.random());
-        const tx = cluster.x + Math.cos(angle) * cluster.radiusX * radius;
-        const tz = cluster.z + Math.sin(angle) * cluster.radiusZ * radius;
-        const terrainY = getRearRidgeHeight(tx, tz);
-        if (terrainY < 0.45) continue;
-        const scale = 0.55 + Math.random() * 0.42;
-        floraGroup.add(createTree(tx, tz, scale, clusterIndex + i, terrainY + 0.02));
+    for (let i = 0; i < hill.treeCount; i++) {
+        const band = 0.28 + Math.random() * 0.48;
+        const tx = hill.x + inwardDirection * hill.radiusX * band + (Math.random() - 0.5) * 12;
+        const tz = hill.z + (Math.random() - 0.5) * hill.radiusZ * 0.78;
+        const terrainY = getSideHillSurfaceHeight(tx, tz);
+        const rise = getSideHillRise(hill, tx, tz);
+        if (rise < 1.0 || isPositionBlocked(tx, tz, 4.0)) continue;
+        const heightScale = THREE.MathUtils.clamp(hill.height / 18, 0.72, 1.12);
+        const scale = (0.58 + Math.random() * 0.46) * heightScale;
+        floraGroup.add(createTree(tx, tz, scale, 30 + hillIndex * 17 + i, terrainY + 0.02));
+    }
+
+    for (let i = 0; i < hill.shrubCount; i++) {
+        const band = 0.24 + Math.random() * 0.54;
+        const sx = hill.x + inwardDirection * hill.radiusX * band + (Math.random() - 0.5) * 15;
+        const sz = hill.z + (Math.random() - 0.5) * hill.radiusZ * 0.82;
+        const terrainY = getSideHillSurfaceHeight(sx, sz);
+        if (getSideHillRise(hill, sx, sz) < 0.7 || isPositionBlocked(sx, sz, 2.0)) continue;
+        const shrub = createRealisticShrub(i % 4 === 0 ? "large" : "medium", 20 + hillIndex * 11 + i);
+        shrub.position.set(sx, terrainY + 0.02, sz);
+        floraGroup.add(shrub);
     }
 });
 
