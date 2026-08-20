@@ -10,12 +10,14 @@ html,
 body {
     width: 100%;
     height: 100%;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     overflow: hidden;
     background-color: #56a4f7;
     font-family: "Nunito", "Segoe UI", Arial, sans-serif;
     user-select: none;
+    overscroll-behavior: none;
 }
 
 /* =====================================================
@@ -27,6 +29,7 @@ body {
     inset: 0;
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     background: #56a4f7;
 }
@@ -172,6 +175,8 @@ body {
 .comparison-label.is-hovered { transform: scale(calc(var(--label-scale, 1) * 1.05)); background: rgba(15, 20, 28, 0.68); }
 .comparison-label-column { min-width: 0; text-align: center; }
 .comparison-label-column + .comparison-label-column { border-left: 1px solid rgba(255, 255, 255, 0.18); }
+.comparison-label.is-view-reversed [data-side="current"] { order: 1; border-left: 0; }
+.comparison-label.is-view-reversed [data-side="previous"] { order: 2; border-left: 1px solid rgba(255, 255, 255, 0.18); }
 .comparison-year { display: block; color: #aeb9c8; font-size: clamp(9px, 0.72vw, 11px); font-weight: 900; }
 .comparison-value { display: block; margin-top: 1px; color: #fff; font-size: clamp(14px, 1.12vw, 19px); font-weight: 900; white-space: nowrap; }
 .comparison-accent { display: block; width: 62%; height: 2px; margin: 4px auto 0; border-radius: 999px; background: var(--accent, #138fe8); }
@@ -905,4 +910,358 @@ body {
 
     .modal-comparison-summary { grid-template-columns: 1fr; }
     .comparison-summary-item + .comparison-summary-item { border-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.10); }
+}
+
+@media (max-width: 760px) {
+    .gallery-ui {
+        top: max(12px, env(safe-area-inset-top));
+        left: max(12px, env(safe-area-inset-left));
+        max-width: calc(100vw - 80px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    }
+
+    .gallery-title {
+        font-size: 19px;
+        line-height: 1.1;
+    }
+
+    .gallery-subtitle {
+        margin-top: 2px;
+        font-size: 11px;
+    }
+
+    .gallery-date {
+        min-height: 34px;
+        max-width: 100%;
+        margin-top: 6px;
+        padding: 6px 10px;
+        font-size: 11.5px;
+    }
+
+    #gallery-update-date-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .date-selector,
+    .data-freshness {
+        max-width: 100%;
+    }
+
+    .date-selector-popover {
+        width: min(270px, calc(100vw - 24px));
+        max-height: calc(100dvh - 145px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    .date-mode-option {
+        min-height: 44px;
+    }
+
+    .data-freshness {
+        gap: 1px;
+        margin-top: 4px;
+        font-size: 9.5px;
+    }
+
+    .data-source-badge {
+        padding: 3px 6px;
+    }
+
+    .reset-view-btn {
+        top: max(12px, env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
+        width: 44px;
+        height: 44px;
+        justify-content: center;
+        padding: 0;
+        border-radius: 50%;
+        touch-action: manipulation;
+    }
+
+    .reset-view-btn .reset-label {
+        display: none;
+    }
+
+    .reset-view-btn .reset-icon {
+        font-size: 19px;
+    }
+
+    .percentage-label {
+        padding: 2px 5px 1px;
+        border-radius: 8px;
+        font-size: clamp(13px, 4vw, 17px);
+    }
+
+    .percentage-label::after {
+        height: 2px;
+        margin-top: 3px;
+    }
+
+    .comparison-label {
+        width: clamp(76px, 22vw, 88px);
+        gap: 2px;
+        padding: 4px 3px;
+    }
+
+    .comparison-year {
+        font-size: 7.5px;
+    }
+
+    .comparison-value {
+        font-size: 10px;
+    }
+
+    .dam-name-label {
+        max-width: 68px;
+        font-size: clamp(8.5px, 2.5vw, 11px);
+        line-height: 1.1;
+    }
+
+    .gallery-controls-hint {
+        right: max(10px, env(safe-area-inset-right));
+        bottom: max(8px, env(safe-area-inset-bottom));
+        left: max(10px, env(safe-area-inset-left));
+        width: auto;
+        min-height: 34px;
+        transform: none;
+        justify-content: center;
+        padding: 7px 12px;
+        font-size: 0;
+        text-align: center;
+    }
+
+    .gallery-controls-hint::after {
+        content: "Baraja dokunarak detayları görüntüleyin";
+        font-size: 10.5px;
+        font-weight: 700;
+    }
+
+    .occupancy-legend {
+        right: max(10px, env(safe-area-inset-right));
+        bottom: calc(max(8px, env(safe-area-inset-bottom)) + 42px);
+        left: max(10px, env(safe-area-inset-left));
+        padding: 7px 10px;
+        border-radius: 13px;
+        pointer-events: none;
+    }
+
+    .legend-header,
+    .legend-label {
+        display: none;
+    }
+
+    .legend-items {
+        flex-direction: row;
+        justify-content: space-between;
+        gap: 7px;
+    }
+
+    .legend-item {
+        gap: 5px;
+        font-size: 10px;
+    }
+
+    .legend-range {
+        min-width: 0;
+    }
+
+    .legend-dot {
+        width: 7px;
+        height: 7px;
+    }
+
+    .modal-backdrop {
+        align-items: stretch;
+        padding:
+            max(8px, env(safe-area-inset-top))
+            max(8px, env(safe-area-inset-right))
+            max(8px, env(safe-area-inset-bottom))
+            max(8px, env(safe-area-inset-left));
+    }
+
+    .modal-card {
+        width: 100%;
+        min-height: 0;
+        max-height: none;
+        height: 100%;
+        border-radius: 18px;
+    }
+
+    .modal-layout {
+        min-height: 0;
+        height: 100%;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .modal-content {
+        flex: 0 0 auto;
+        padding: 56px 18px 20px;
+        gap: 17px;
+        overflow: visible;
+    }
+
+    .modal-close-btn {
+        position: fixed;
+        top: max(20px, calc(env(safe-area-inset-top) + 12px));
+        right: max(20px, calc(env(safe-area-inset-right) + 12px));
+        width: 42px;
+        height: 42px;
+        background: rgba(12, 17, 23, 0.76);
+        touch-action: manipulation;
+    }
+
+    .status-badge {
+        min-height: 32px;
+        padding: 5px 11px;
+        font-size: 11px;
+    }
+
+    .modal-title {
+        max-width: calc(100% - 46px);
+        font-size: clamp(24px, 7vw, 29px);
+        line-height: 1.12;
+    }
+
+    .modal-location {
+        font-size: 13px;
+        line-height: 1.35;
+    }
+
+    .modal-stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+    }
+
+    .stat-card {
+        min-width: 0;
+        padding: 12px;
+        border-radius: 13px;
+    }
+
+    .stat-card:first-child {
+        grid-column: 1 / -1;
+    }
+
+    .stat-label {
+        font-size: 9px;
+    }
+
+    .stat-value {
+        overflow-wrap: anywhere;
+        white-space: normal;
+        font-size: clamp(13px, 3.6vw, 16px);
+    }
+
+    .stat-value.highlight {
+        font-size: 22px;
+    }
+
+    .info-row {
+        flex-wrap: wrap;
+        font-size: 12px;
+    }
+
+    .modal-description {
+        font-size: 12.5px;
+    }
+
+    .modal-chart-panel {
+        flex: 0 0 auto;
+        min-height: 300px;
+        margin: 0 14px 18px;
+        padding: 16px;
+        border-radius: 16px;
+    }
+
+    .modal-chart-header h3 {
+        font-size: 18px;
+    }
+
+    .modal-chart-container,
+    .modal-trend-chart {
+        min-height: 220px;
+    }
+
+    .modal-chart-range,
+    .modal-chart-footer {
+        font-size: 10px;
+    }
+}
+
+@media (max-width: 760px) and (hover: none),
+       (max-width: 760px) and (pointer: coarse) {
+    .percentage-label.is-hovered,
+    .comparison-label.is-hovered {
+        transform: scale(var(--label-scale, 1));
+    }
+}
+
+@media (max-width: 380px) {
+    .gallery-ui {
+        max-width: calc(100vw - 70px);
+    }
+
+    .gallery-title {
+        font-size: 17px;
+    }
+
+    .gallery-subtitle,
+    .used-data-date {
+        display: none;
+    }
+
+    .legend-items {
+        gap: 4px;
+    }
+
+    .legend-item {
+        gap: 3px;
+        font-size: 9px;
+    }
+
+    .modal-content {
+        padding-inline: 14px;
+    }
+
+    .modal-chart-panel {
+        margin-inline: 10px;
+    }
+}
+
+@media (max-height: 600px) and (orientation: landscape) {
+    .gallery-ui {
+        top: 10px;
+        left: 12px;
+    }
+
+    .gallery-subtitle,
+    .used-data-date {
+        display: none;
+    }
+
+    .reset-view-btn {
+        top: 10px;
+        right: 12px;
+    }
+
+    .occupancy-legend {
+        bottom: 10px;
+        left: auto;
+        width: auto;
+    }
+
+    .gallery-controls-hint {
+        right: auto;
+        bottom: 10px;
+        width: min(48vw, 360px);
+    }
+
+    .modal-content {
+        padding-top: 50px;
+    }
 }

@@ -66,7 +66,13 @@ camera.position.copy(DEFAULT_CAMERA_POS);
 camera.lookAt(DEFAULT_CONTROLS_TARGET);
 
 const renderer = new THREE.WebGPURenderer({
-    antialias: true
+    antialias: true,
+    // Chromium'un mobil/Responsive Design resize akışında WebGPU arka ucu,
+    // kullanımda olan RGBA16Float ara hedefini yok edip eski command buffer'ı
+    // submit edebiliyor. Aynı TSL materyallerini destekleyen WebGL2 arka ucu bu
+    // sürücü yarışına girmeden kararlı biçimde çalışır.
+    forceWebGL: true,
+    outputBufferType: THREE.UnsignedByteType
 });
 
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -354,6 +360,16 @@ const tankPositions = [
     { x: 17.0, z: -2.2 }  // Alaçatı
 ];
 
+const mobileTankPositions = [
+    { x: -11.4, z: -2.2 },
+    { x: -5.7, z: -2.2 },
+    { x: 0.0, z: -2.2 },
+    { x: 5.7, z: -2.2 },
+    { x: 11.4, z: -2.2 }
+];
+
+const MOBILE_TANK_SCALE = 1.12;
+
 function getTankPosition(index) {
     return tankPositions[index] || { x: 0, z: 0 };
 }
@@ -537,19 +553,44 @@ function getMountainHeight(x, z) {
     // Geniş geçiş bandı sert kesik yüzeyleri ve yapay çöküntüleri önler.
     const pondFactor = 1.0;
 
-    function broadRidge(centerX, centerZ, radiusX, radiusZ, height) {
-        const distance = Math.hypot((x - centerX) / radiusX, (z - centerZ) / radiusZ);
+    function broadRidge(centerX, centerZ, radiusX, radiusZ, height, seed) {
+        const dx = (x - centerX) / radiusX;
+        const dz = (z - centerZ) / radiusZ;
+        const distance = Math.hypot(dx, dz);
         if (distance >= 1) return 0;
-        const t = 1 - distance;
-        return height * t * t * (3 - 2 * t);
+
+        const angle = Math.atan2(dz, dx);
+        const irregularEdge = 1
+            + Math.sin(angle * 3 + seed) * 0.065
+            + Math.sin(angle * 7 - seed * 1.4) * 0.025;
+        const normalizedDistance = distance / irregularEdge;
+        if (normalizedDistance >= 1) return 0;
+
+        const t = 1 - normalizedDistance;
+        const ridgeAngle = seed * 1.31;
+        const ridgeAxis = dx * Math.cos(ridgeAngle) + dz * Math.sin(ridgeAngle);
+        const crossAxis = -dx * Math.sin(ridgeAngle) + dz * Math.cos(ridgeAngle);
+        const mainRidgeDistance = Math.hypot(ridgeAxis / 1.18, crossAxis / 0.66);
+        const secondaryDistance = Math.hypot(
+            (ridgeAxis - 0.34) / 0.58,
+            (crossAxis + 0.10) / 0.72
+        );
+        const mainRidge = Math.pow(Math.max(1 - mainRidgeDistance, 0), 0.76);
+        const secondaryPeak = Math.pow(Math.max(1 - secondaryDistance, 0), 0.84) * 0.72;
+        const edgeFade = THREE.MathUtils.smoothstep(t, 0.0, 0.16);
+        const slopeBreak = 0.94
+            + Math.sin(ridgeAxis * 8.0 + seed) * 0.055
+            + Math.cos(crossAxis * 10.0 - seed) * 0.035;
+
+        return height * Math.max(mainRidge, secondaryPeak) * edgeFade * slopeBreak;
     }
 
     let naturalHeight = 0;
-    naturalHeight = Math.max(naturalHeight, broadRidge(-105, -82, 122, 92, 15.0));
-    naturalHeight = Math.max(naturalHeight, broadRidge(-45, -102, 132, 88, 18.5));
-    naturalHeight = Math.max(naturalHeight, broadRidge(20, -108, 142, 94, 19.0));
-    naturalHeight = Math.max(naturalHeight, broadRidge(82, -96, 128, 88, 16.5));
-    naturalHeight = Math.max(naturalHeight, broadRidge(135, -78, 112, 80, 13.5));
+    naturalHeight = Math.max(naturalHeight, broadRidge(-105, -82, 122, 92, 15.0, 0.75));
+    naturalHeight = Math.max(naturalHeight, broadRidge(-45, -102, 132, 88, 18.5, 1.55));
+    naturalHeight = Math.max(naturalHeight, broadRidge(20, -108, 142, 94, 19.0, 2.35));
+    naturalHeight = Math.max(naturalHeight, broadRidge(82, -96, 128, 88, 16.5, 3.10));
+    naturalHeight = Math.max(naturalHeight, broadRidge(135, -78, 112, 80, 13.5, 3.90));
 
     const backgroundBlend = THREE.MathUtils.clamp((-z - 24) / 110, 0, 1);
     const longUndulation =
@@ -583,8 +624,11 @@ for (let i = 0; i < posAttrMaster.count; i++) {
     terrainColors.push(color.r, color.g, color.b);
 }
 masterTerrainGeom.setAttribute("color", new THREE.Float32BufferAttribute(terrainColors, 3));
-masterTerrainGeom = carveDamClearance(masterTerrainGeom, 0, 0, 1.1, 1.1);
+// Baraj açıklığı geometriyi üçgenlere ayırmadan önce yumuşak tepe normallerini
+// hesapla. carveDamClearance bu normalleri kopyalayarak korur; sonradan yeniden
+// hesaplamak her üçgeni ayrı bir faset gibi görünür hale getiriyordu.
 masterTerrainGeom.computeVertexNormals();
+masterTerrainGeom = carveDamClearance(masterTerrainGeom, 0, 0, 1.1, 1.1);
 
 const masterTerrainMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -711,13 +755,13 @@ function createConnectedRidgeLayer({ z, width, depth, height, seed, lowColor, hi
 // kadraja girerek platform ve baraj görüşünü açık tutar.
 const sideHillConfigs = Object.freeze([
     // Ön rezervuar görünümünü çerçeveleyen ilk iki büyük tepe korunur.
-    { x: -168, z: -108, radiusX: 98, radiusZ: 88, height: 20.5, seed: 1.25, treeCount: 5, shrubCount: 3 },
-    { x: 182, z: -91, radiusX: 92, radiusZ: 92, height: 22.0, seed: 2.05, treeCount: 5, shrubCount: 3 },
+    { x: -168, z: -108, radiusX: 98, radiusZ: 88, height: 22.8, seed: 1.25, treeCount: 5, shrubCount: 3 },
+    { x: 182, z: -91, radiusX: 92, radiusZ: 92, height: 24.4, seed: 2.05, treeCount: 5, shrubCount: 3 },
 
     // Karşı çapraz açıda iki büyük tepe arasında kalan boş geçiş.
-    { x: -72, z: -170, radiusX: 88, radiusZ: 76, height: 14.0, seed: 2.30, treeCount: 4, shrubCount: 2 },
-    { x: 0, z: -184, radiusX: 102, radiusZ: 82, height: 18.2, seed: 2.55, treeCount: 5, shrubCount: 2 },
-    { x: 98, z: -168, radiusX: 78, radiusZ: 74, height: 15.0, seed: 2.80, treeCount: 4, shrubCount: 2 },
+    { x: -72, z: -170, radiusX: 88, radiusZ: 76, height: 15.7, seed: 2.30, treeCount: 4, shrubCount: 2 },
+    { x: 0, z: -184, radiusX: 102, radiusZ: 82, height: 20.4, seed: 2.55, treeCount: 5, shrubCount: 2 },
+    { x: 98, z: -168, radiusX: 78, radiusZ: 74, height: 16.7, seed: 2.80, treeCount: 4, shrubCount: 2 },
 
     // Referans açısındaki sol boşluk: örtüşen 7 farklı tepe.
     { x: -205, z: 160, radiusX: 58, radiusZ: 72, height: 10.5, seed: 3.10, treeCount: 3, shrubCount: 1 },
@@ -764,12 +808,25 @@ function getSideHillRise(config, x, z) {
     if (normalizedDistance >= 1) return 0;
 
     const t = 1 - normalizedDistance;
-    const smoothDome = t * t * (3 - 2 * t);
+    const ridgeAngle = config.seed * 1.17;
+    const ridgeAxis = dx * Math.cos(ridgeAngle) + dz * Math.sin(ridgeAngle);
+    const crossAxis = -dx * Math.sin(ridgeAngle) + dz * Math.cos(ridgeAngle);
+    const ridgeDistance = Math.hypot(ridgeAxis / 1.20, crossAxis / 0.67);
+    const shoulderDistance = Math.hypot(
+        (ridgeAxis + 0.31) / 0.62,
+        (crossAxis - 0.12) / 0.74
+    );
+    const ridgeProfile = Math.pow(Math.max(1 - ridgeDistance, 0), 0.72);
+    const shoulderProfile = Math.pow(Math.max(1 - shoulderDistance, 0), 0.86) * 0.70;
+    const edgeFade = THREE.MathUtils.smoothstep(t, 0.0, 0.17);
     const broadVariation =
-        0.93
-        + Math.sin((x + z) * 0.026 + config.seed) * 0.055
-        + Math.cos(x * 0.041 - z * 0.018 + config.seed) * 0.035;
-    return Math.max(0, config.height * Math.pow(smoothDome, 0.82) * broadVariation);
+        0.96
+        + Math.sin(ridgeAxis * 8.5 + config.seed) * 0.065
+        + Math.cos(crossAxis * 11.0 - config.seed) * 0.040;
+    return Math.max(
+        0,
+        config.height * Math.max(ridgeProfile, shoulderProfile) * edgeFade * broadVariation
+    );
 }
 
 function getSideHillSurfaceHeight(x, z) {
@@ -839,8 +896,9 @@ function createSideHillTerrain() {
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
     geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(indices);
-    geometry = carveDamClearance(geometry, 0, 0, 1.1, 1.1);
+    // Aynı yükselti geometrisini koruyup yalnızca ışık geçişini yumuşat.
     geometry.computeVertexNormals();
+    geometry = carveDamClearance(geometry, 0, 0, 1.1, 1.1);
 
     const material = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -1296,6 +1354,30 @@ const treeClusters = [
     { x: 111, z: 90, count: 6, radius: 15 }
 ];
 
+// Platformun ön cephesinden (+Z yönü) alçak açıyla bakıldığında bilgi panosu
+// ve tank etiketleri görünür kalmalı. Bu koridorda uzun gövdeli ağaç yerine
+// aynı yeşil yoğunluğu koruyan alçak çalılar kullanılır.
+function isPlatformForegroundSightline(x, z) {
+    if (z < walkwayRadius + 1.5 || z > 96) return false;
+
+    // Platforma yakın bölüm dar, kameraya yaklaştıkça görüş konisi geniştir.
+    const normalizedDepth = THREE.MathUtils.clamp((z - walkwayRadius) / 72, 0, 1);
+    const corridorHalfWidth = THREE.MathUtils.lerp(31, 46, normalizedDepth);
+    return Math.abs(x) < corridorHalfWidth;
+}
+
+function addForegroundAwareTree(x, z, scale, materialIndex) {
+    if (isPlatformForegroundSightline(x, z)) {
+        const shrub = createRealisticShrub(scale > 1.0 ? "large" : "medium", materialIndex);
+        shrub.position.set(x, getMountainHeight(x, z), z);
+        shrub.scale.multiplyScalar(0.92);
+        floraGroup.add(shrub);
+        return;
+    }
+
+    floraGroup.add(createTree(x, z, scale, materialIndex));
+}
+
 let treesPlaced = 0;
 const TREE_COUNT = 108;
 
@@ -1308,8 +1390,7 @@ treeClusters.forEach((cluster, cIdx) => {
 
         if (!isPositionBlocked(tx, tz, 2.0)) {
             const scale = 0.75 + Math.random() * 0.55;
-            const tree = createTree(tx, tz, scale, cIdx + i);
-            floraGroup.add(tree);
+            addForegroundAwareTree(tx, tz, scale, cIdx + i);
             treesPlaced++;
         }
     }
@@ -1325,8 +1406,7 @@ while (treesPlaced < TREE_COUNT && treeAttempts < 5000) {
 
     if (!isPositionBlocked(tx, tz, 2.0)) {
         const scale = 0.75 + Math.random() * 0.55;
-        const tree = createTree(tx, tz, scale, treesPlaced);
-        floraGroup.add(tree);
+        addForegroundAwareTree(tx, tz, scale, treesPlaced);
         treesPlaced++;
     }
 }
@@ -1361,7 +1441,176 @@ sideHillConfigs.forEach((hill, hillIndex) => {
 });
 
 // ======================================================
-// 15.1. GENİŞ DOĞAL DAĞ GÖLETİ, ORGANİK KIYILAR VE SAZLIKLAR
+// 15.1. UZAK EGE YAMAÇLARI: ÇAM KORULARI, MAKİ VE KAYA AÇILIMLARI
+// ======================================================
+
+// Uzak sırtlarda tam LOD ağaçlar yerine InstancedMesh kullanılır. Böylece yüzlerce
+// küçük silüet yalnızca birkaç çizim çağrısıyla yamaçlara doğal doku kazandırır.
+function distantLandscapeRandom(seed) {
+    let value = seed >>> 0;
+    return () => {
+        value = (value * 1664525 + 1013904223) >>> 0;
+        return value / 4294967296;
+    };
+}
+
+function createDistantAegeanHillsideDetails() {
+    const random = distantLandscapeRandom(28493);
+    const rearHills = sideHillConfigs.slice(0, 5);
+    const pineTargets = [72, 68, 58, 82, 64];
+    const scrubTargets = [82, 76, 68, 92, 72];
+    const rockTargets = [5, 5, 4, 6, 5];
+    const totalPines = pineTargets.reduce((sum, value) => sum + value, 0);
+    const totalScrub = scrubTargets.reduce((sum, value) => sum + value, 0);
+    const totalRocks = rockTargets.reduce((sum, value) => sum + value, 0);
+
+    const pineTrunkGeometry = new THREE.CylinderGeometry(0.17, 0.25, 2.45, 6);
+    pineTrunkGeometry.translate(0, 1.225, 0);
+    const pineCanopyGeometry = new THREE.ConeGeometry(1.28, 2.65, 7);
+    pineCanopyGeometry.translate(0, 2.55, 0);
+    const pineCanopyUpperGeometry = new THREE.ConeGeometry(0.92, 2.45, 7);
+    pineCanopyUpperGeometry.translate(0, 3.88, 0);
+    const scrubGeometry = new THREE.DodecahedronGeometry(0.72, 0);
+    const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+
+    const pineTrunks = new THREE.InstancedMesh(
+        pineTrunkGeometry,
+        new THREE.MeshStandardMaterial({ color: 0x4b3928, roughness: 0.98 }),
+        totalPines
+    );
+    const pineCanopies = new THREE.InstancedMesh(
+        pineCanopyGeometry,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.94 }),
+        totalPines
+    );
+    const pineCanopiesUpper = new THREE.InstancedMesh(
+        pineCanopyUpperGeometry,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.94 }),
+        totalPines
+    );
+    const distantScrub = new THREE.InstancedMesh(
+        scrubGeometry,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.97 }),
+        totalScrub
+    );
+    const distantRocks = new THREE.InstancedMesh(
+        rockGeometry,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1.0, flatShading: true }),
+        totalRocks
+    );
+
+    const pineColors = [
+        new THREE.Color(0x244b30),
+        new THREE.Color(0x2d5935),
+        new THREE.Color(0x365f38),
+        new THREE.Color(0x1f432d)
+    ];
+    const scrubColors = [
+        new THREE.Color(0x385f32),
+        new THREE.Color(0x456d35),
+        new THREE.Color(0x52783c),
+        new THREE.Color(0x2e5631)
+    ];
+    const rockColors = [
+        new THREE.Color(0x8e8b72),
+        new THREE.Color(0x9d916e),
+        new THREE.Color(0x777d6b)
+    ];
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const rotation = new THREE.Euler();
+    let pineIndex = 0;
+    let scrubIndex = 0;
+    let rockIndex = 0;
+
+    function findHillPoint(hill, minimumRise, bandMin, bandMax) {
+        for (let attempt = 0; attempt < 80; attempt++) {
+            const angle = random() * Math.PI * 2;
+            const band = bandMin + Math.sqrt(random()) * (bandMax - bandMin);
+            const x = hill.x + Math.cos(angle) * hill.radiusX * band;
+            const z = hill.z + Math.sin(angle) * hill.radiusZ * band;
+            const rise = getSideHillRise(hill, x, z);
+            const damDistance = Math.hypot(x - DAM_ENVIRONMENT.x, z - DAM_ENVIRONMENT.z);
+            if (rise < minimumRise || damDistance < 42) continue;
+
+            // Geniş boşluklar bırakan sinüzoidal kabul maskesi koruları doğal
+            // kümelere ayırır; bitki örtüsü eşit aralıklı bir ızgaraya dönüşmez.
+            const patchMask = (
+                Math.sin(x * 0.083 + hill.seed * 2.7)
+                + Math.cos(z * 0.097 - hill.seed * 1.9)
+            ) * 0.25 + 0.50;
+            if (random() > 0.38 + patchMask * 0.58) continue;
+            return { x, z, y: getSideHillSurfaceHeight(x, z), rise };
+        }
+        return null;
+    }
+
+    rearHills.forEach((hill, hillIndex) => {
+        for (let i = 0; i < pineTargets[hillIndex]; i++) {
+            const point = findHillPoint(hill, 2.1, 0.18, 0.76);
+            if (!point) continue;
+            const size = 0.84 + random() * 0.70;
+            position.set(point.x, point.y + 0.03, point.z);
+            rotation.set(0, random() * Math.PI * 2, (random() - 0.5) * 0.035);
+            quaternion.setFromEuler(rotation);
+            scale.set(size * (0.88 + random() * 0.15), size, size * (0.88 + random() * 0.15));
+            matrix.compose(position, quaternion, scale);
+            pineTrunks.setMatrixAt(pineIndex, matrix);
+            pineCanopies.setMatrixAt(pineIndex, matrix);
+            pineCanopiesUpper.setMatrixAt(pineIndex, matrix);
+            pineCanopies.setColorAt(pineIndex, pineColors[(hillIndex + i) % pineColors.length]);
+            pineCanopiesUpper.setColorAt(pineIndex, pineColors[(hillIndex + i + 1) % pineColors.length]);
+            pineIndex++;
+        }
+
+        for (let i = 0; i < scrubTargets[hillIndex]; i++) {
+            const point = findHillPoint(hill, 1.0, 0.22, 0.88);
+            if (!point) continue;
+            const width = 0.72 + random() * 1.10;
+            position.set(point.x, point.y + 0.34, point.z);
+            rotation.set(0, random() * Math.PI * 2, 0);
+            quaternion.setFromEuler(rotation);
+            scale.set(width, 0.42 + random() * 0.34, width * (0.78 + random() * 0.38));
+            matrix.compose(position, quaternion, scale);
+            distantScrub.setMatrixAt(scrubIndex, matrix);
+            distantScrub.setColorAt(scrubIndex, scrubColors[(hillIndex * 3 + i) % scrubColors.length]);
+            scrubIndex++;
+        }
+
+        for (let i = 0; i < rockTargets[hillIndex]; i++) {
+            const point = findHillPoint(hill, 2.4, 0.32, 0.78);
+            if (!point) continue;
+            const width = 1.9 + random() * 2.8;
+            position.set(point.x, point.y + 0.28, point.z);
+            rotation.set((random() - 0.5) * 0.22, random() * Math.PI * 2, (random() - 0.5) * 0.18);
+            quaternion.setFromEuler(rotation);
+            scale.set(width, 0.34 + random() * 0.34, width * (0.48 + random() * 0.34));
+            matrix.compose(position, quaternion, scale);
+            distantRocks.setMatrixAt(rockIndex, matrix);
+            distantRocks.setColorAt(rockIndex, rockColors[(hillIndex + i) % rockColors.length]);
+            rockIndex++;
+        }
+    });
+
+    for (const mesh of [pineTrunks, pineCanopies, pineCanopiesUpper, distantScrub, distantRocks]) {
+        mesh.count = mesh === pineTrunks || mesh === pineCanopies || mesh === pineCanopiesUpper
+            ? pineIndex
+            : mesh === distantScrub ? scrubIndex : rockIndex;
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.castShadow = false;
+        mesh.receiveShadow = true;
+        mesh.frustumCulled = true;
+        floraGroup.add(mesh);
+    }
+}
+
+createDistantAegeanHillsideDetails();
+
+// ======================================================
+// 15.2. GENİŞ DOĞAL DAĞ GÖLETİ, ORGANİK KIYILAR VE SAZLIKLAR
 // ======================================================
 
 const pondGroup = new THREE.Group();
@@ -1561,14 +1810,51 @@ function buildReservoirShape(expansion = 0) {
     return shape;
 }
 
+function createReservoirRingGeometry(outerExpansion, innerExpansion) {
+    const outerShape = buildReservoirShape(outerExpansion);
+    const outerPoints = outerShape.getPoints();
+    let innerPoints = buildReservoirShape(innerExpansion).getPoints();
+
+    // ShapeGeometry deliğinin dış konturun tersi yönde çizilmesi gerekir.
+    if (THREE.ShapeUtils.isClockWise(outerPoints) === THREE.ShapeUtils.isClockWise(innerPoints)) {
+        innerPoints = [...innerPoints].reverse();
+    }
+    const hole = new THREE.Path();
+    innerPoints.forEach((point, index) => {
+        if (index === 0) hole.moveTo(point.x, point.y);
+        else hole.lineTo(point.x, point.y);
+    });
+    hole.closePath();
+    outerShape.holes.push(hole);
+    return new THREE.ShapeGeometry(outerShape);
+}
+
+// Tek renkli keskin sınır yerine üç kademeli kıyı: kuru yamaç, taşlı geçiş ve
+// suyun sürekli ıslattığı koyu şerit. Katmanlar suya doğru incelir.
+const reservoirOuterShore = new THREE.Mesh(
+    new THREE.ShapeGeometry(buildReservoirShape(5.4)),
+    new THREE.MeshStandardMaterial({ color: 0x667253, roughness: 1.0, flatShading: false, side: THREE.DoubleSide })
+);
+reservoirOuterShore.rotation.x = -Math.PI / 2;
+reservoirOuterShore.position.set(0, 0.052, -56.0);
+reservoirOuterShore.receiveShadow = true;
+
+const reservoirStoneShore = new THREE.Mesh(
+    new THREE.ShapeGeometry(buildReservoirShape(3.45)),
+    new THREE.MeshStandardMaterial({ color: 0x8b8668, roughness: 0.99, flatShading: false, side: THREE.DoubleSide })
+);
+reservoirStoneShore.rotation.x = -Math.PI / 2;
+reservoirStoneShore.position.set(0, 0.073, -56.0);
+reservoirStoneShore.receiveShadow = true;
+
 const reservoirShore = new THREE.Mesh(
-    new THREE.ShapeGeometry(buildReservoirShape(3.2)),
-    new THREE.MeshStandardMaterial({ color: 0x7e845d, roughness: 0.98, flatShading: false, side: THREE.DoubleSide })
+    new THREE.ShapeGeometry(buildReservoirShape(1.65)),
+    new THREE.MeshStandardMaterial({ color: 0x596f67, roughness: 0.88, flatShading: false, side: THREE.DoubleSide })
 );
 reservoirShore.rotation.x = -Math.PI / 2;
-reservoirShore.position.set(0, 0.075, -56.0);
+reservoirShore.position.set(0, 0.096, -56.0);
 reservoirShore.receiveShadow = true;
-reservoirGroup.add(reservoirShore);
+reservoirGroup.add(reservoirOuterShore, reservoirStoneShore, reservoirShore);
 
 function createReservoirNormalTexture() {
     const size = 128;
@@ -1640,6 +1926,84 @@ function createReservoirColorTexture() {
     return texture;
 }
 
+function createReservoirGlintTexture() {
+    const size = 512;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    let seed = 9137;
+    const random = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+    };
+
+    ctx.clearRect(0, 0, size, size);
+    for (let i = 0; i < 115; i++) {
+        const x = random() * size;
+        const y = random() * size;
+        const length = 8 + random() * 42;
+        const alpha = 0.10 + random() * 0.34;
+        const gradient = ctx.createLinearGradient(x - length, y, x + length, y);
+        gradient.addColorStop(0, "rgba(255,255,255,0)");
+        gradient.addColorStop(0.50, `rgba(234,250,255,${alpha})`);
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 0.8 + random() * 2.2;
+        ctx.beginPath();
+        ctx.moveTo(x - length, y);
+        ctx.quadraticCurveTo(x, y + (random() - 0.5) * 3.5, x + length, y);
+        ctx.stroke();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2.6, 3.4);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
+function createShoreWaveMaskTexture() {
+    const size = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    let seed = 27551;
+    const random = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+    };
+
+    ctx.clearRect(0, 0, size, size);
+    for (let i = 0; i < 58; i++) {
+        const x = random() * size;
+        const y = random() * size;
+        const radius = 13 + random() * 34;
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        gradient.addColorStop(0, `rgba(255,255,255,${0.50 + random() * 0.42})`);
+        gradient.addColorStop(0.58, `rgba(255,255,255,${0.18 + random() * 0.22})`);
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(1.8 + random() * 1.4, 0.55 + random() * 0.45);
+        ctx.translate(-x, -y);
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2.4, 2.0);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
 function createReservoirGeometry(expansion = 0) {
     const geometry = new THREE.ShapeGeometry(buildReservoirShape(expansion));
     geometry.computeBoundingBox();
@@ -1661,16 +2025,18 @@ function createReservoirGeometry(expansion = 0) {
 
 const reservoirNormalTexture = createReservoirNormalTexture();
 const reservoirColorTexture = createReservoirColorTexture();
+const reservoirGlintTexture = createReservoirGlintTexture();
+const reservoirShoreWaveMaskTexture = createShoreWaveMaskTexture();
 
 const reservoirWaterMat = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
     map: reservoirColorTexture,
-    roughness: 0.17,
+    roughness: 0.14,
     metalness: 0.02,
-    clearcoat: 0.32,
-    clearcoatRoughness: 0.27,
+    clearcoat: 0.52,
+    clearcoatRoughness: 0.19,
     normalMap: reservoirNormalTexture,
-    normalScale: new THREE.Vector2(0.15, 0.15),
+    normalScale: new THREE.Vector2(0.24, 0.24),
     transparent: true,
     opacity: 0.94,
     side: THREE.DoubleSide,
@@ -1681,6 +2047,54 @@ reservoirWater.rotation.x = -Math.PI / 2;
 reservoirWater.position.set(0, 0.12, -56.0);
 reservoirWater.receiveShadow = true;
 reservoirGroup.add(reservoirWater);
+
+// Rüzgârla yer değiştiren ince güneş parıltıları. Additive katman yalnızca
+// açık çizgileri gösterir; ana su rengini veya derinlik hissini örtmez.
+const reservoirGlintMaterial = new THREE.MeshBasicMaterial({
+    map: reservoirGlintTexture,
+    color: 0xe9fbff,
+    transparent: true,
+    opacity: 0.20,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+});
+const reservoirGlint = new THREE.Mesh(createReservoirGeometry(-0.10), reservoirGlintMaterial);
+reservoirGlint.rotation.x = -Math.PI / 2;
+reservoirGlint.position.set(0, 0.148, -56.0);
+reservoirGlint.renderOrder = 3;
+reservoirGroup.add(reservoirGlint);
+
+// Kıyıya çarpan üç ince dalga cephesi. Çok küçük ölçek büyümesi çizgiyi dışarı
+// taşırken saydamlık döngüsü dalganın kıyıda sönmesi hissini verir.
+const reservoirShoreWaves = [];
+[
+    { outer: 0.48, inner: -0.16, y: 0.154, opacity: 0.31, phase: 0.0, speed: 1.00 },
+    { outer: 1.02, inner: 0.56, y: 0.151, opacity: 0.21, phase: 2.1, speed: 0.86 },
+    { outer: 1.62, inner: 1.18, y: 0.149, opacity: 0.13, phase: 4.2, speed: 0.74 }
+].forEach((config, index) => {
+    const waveTexture = reservoirShoreWaveMaskTexture.clone();
+    waveTexture.offset.set(index * 0.19, index * 0.13);
+    waveTexture.needsUpdate = true;
+    const material = new THREE.MeshBasicMaterial({
+        map: waveTexture,
+        color: index === 0 ? 0xe7fbff : 0xbfe8ee,
+        transparent: true,
+        opacity: config.opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending
+    });
+    const mesh = new THREE.Mesh(
+        createReservoirRingGeometry(config.outer, config.inner),
+        material
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(0, config.y, -56.0);
+    mesh.renderOrder = 4 + index;
+    reservoirGroup.add(mesh);
+    reservoirShoreWaves.push({ mesh, material, waveTexture, ...config });
+});
 
 function createReservoirIsland(x, z, radiusX, radiusZ, seed) {
     const island = new THREE.Group();
@@ -1916,6 +2330,55 @@ function createDamFlowTexture(type = "body") {
 const damSpillwayTexture = createDamFlowTexture("body");
 const damSpillwayFoamTexture = createDamFlowTexture("foam");
 
+// Uzaktan bakışta ince köpük damarlarının hareketi seçilemeyebiliyor. Bu doku,
+// su perdesi boyunca aşağı yürüyen az sayıda geniş kırılma çizgisi üretir.
+// Çizgiler sürekli beyaz bantlar değildir; iki yana doğru yumuşayıp parçalanır.
+function createDamSurgeTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 1024;
+    const ctx = canvas.getContext("2d");
+    const random = damWaterRandom(18821);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let crest = 0; crest < 7; crest++) {
+        const baseY = 52 + crest * 151 + random() * 34;
+        const widthGradient = ctx.createLinearGradient(28, 0, 484, 0);
+        widthGradient.addColorStop(0, "rgba(235,251,255,0)");
+        widthGradient.addColorStop(0.16, "rgba(241,253,255,0.34)");
+        widthGradient.addColorStop(0.50, "rgba(255,255,255,0.86)");
+        widthGradient.addColorStop(0.84, "rgba(241,253,255,0.34)");
+        widthGradient.addColorStop(1, "rgba(235,251,255,0)");
+
+        ctx.beginPath();
+        for (let x = 22; x <= 490; x += 18) {
+            const y = baseY
+                + Math.sin(x * 0.021 + crest * 1.7) * (9 + random() * 4)
+                + Math.sin(x * 0.057 + crest) * 3;
+            if (x === 22) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = widthGradient;
+        ctx.lineWidth = 19 + random() * 10;
+        ctx.lineCap = "round";
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.34;
+        ctx.lineWidth = 42 + random() * 16;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 1.18);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+}
+
+const damSpillwaySurgeTexture = createDamSurgeTexture();
+
 function createDamSpillwayNormalTexture() {
     const size = 128;
     const canvas = document.createElement("canvas");
@@ -2134,6 +2597,7 @@ const damSpillwayBodyGeometry = buildDamSpillwayGeometry(3.72, -0.025);
 const damSpillwayDepthGeometry = buildDamSpillwayGeometry(3.92, -0.105);
 const damSpillwayGeometry = buildDamSpillwayGeometry(3.52, 0.055);
 const damSpillwayFoamGeometry = buildDamSpillwayGeometry(2.65, 0.105);
+const damSpillwaySurgeGeometry = buildDamSpillwayGeometry(3.22, 0.165);
 const damSpillwayHighlightGeometry = buildDamSpillwayGeometry(1.58, 0.145, 0.18);
 const damSpillwayEdgeLeftGeometry = buildDamSpillwayGeometry(0.34, 0.115, -1.58);
 const damSpillwayEdgeRightGeometry = buildDamSpillwayGeometry(0.34, 0.115, 1.58);
@@ -2160,6 +2624,9 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     highlightTexture.repeat.set(1.25, 2.75);
     highlightTexture.offset.set(0.08 + flowIndex * 0.11, flowIndex * 0.237);
     highlightTexture.needsUpdate = true;
+    const surgeTexture = damSpillwaySurgeTexture.clone();
+    surgeTexture.offset.y = flowIndex * 0.217;
+    surgeTexture.needsUpdate = true;
     const normalTexture = damSpillwayNormalTexture.clone();
     normalTexture.offset.y = flowIndex * 0.071;
     normalTexture.needsUpdate = true;
@@ -2174,6 +2641,15 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     highlightMaterial.color.setHex(0xf3fcff);
     highlightMaterial.opacity = 0.34;
     highlightMaterial.blending = THREE.AdditiveBlending;
+    const surgeMaterial = new THREE.MeshBasicMaterial({
+        map: surgeTexture,
+        color: 0xf4fdff,
+        transparent: true,
+        opacity: 0.76,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
 
     const bodyMaterial = waterMaterial.clone();
     bodyMaterial.color.setHex(0x2f9fbd);
@@ -2204,6 +2680,8 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     waterSheet.renderOrder = 6;
     const foamVeins = new THREE.Mesh(damSpillwayFoamGeometry, foamMaterial);
     foamVeins.renderOrder = 7;
+    const surgeCrests = new THREE.Mesh(damSpillwaySurgeGeometry, surgeMaterial);
+    surgeCrests.renderOrder = 9;
     const flowHighlight = new THREE.Mesh(damSpillwayHighlightGeometry, highlightMaterial);
     flowHighlight.renderOrder = 8;
     const leftEdgeFoam = new THREE.Mesh(damSpillwayEdgeLeftGeometry, foamMaterial);
@@ -2230,6 +2708,22 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     impactSpray.position.set(0, -0.18, 10.86);
     impactSpray.renderOrder = 9;
 
+    // Savak tabanındaki tek, genişleyen halka uzaktan dahi suyun beton aprona
+    // çarpıp göle yayıldığını anlatır. Her göz farklı fazda çalışır.
+    const pulseRingMaterial = new THREE.MeshBasicMaterial({
+        color: 0xe8fbff,
+        transparent: true,
+        opacity: 0.58,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    const pulseRing = new THREE.Mesh(new THREE.RingGeometry(1.05, 1.28, 40), pulseRingMaterial);
+    pulseRing.rotation.x = -Math.PI / 2;
+    pulseRing.position.set(0, -1.035, 12.4);
+    pulseRing.scale.set(1.35, 2.25, 1);
+    pulseRing.renderOrder = 10;
+
     // Her savakta az sayıda, kısa ömürlü parçacık çarpma enerjisini destekler.
     // Düşük adet ve ortak materyal, efektin sakin kalmasını ve performansı korur.
     const splashCount = 12;
@@ -2253,28 +2747,32 @@ for (const segmentIndex of damSpillwaySegmentIndices) {
     const splashPoints = new THREE.Points(splashGeometry, damSplashMat);
     splashPoints.renderOrder = 10;
 
-    spillway.add(depthLayer, waterBody, waterSheet, foamVeins, flowHighlight, leftEdgeFoam, rightEdgeFoam, mixingFoam, impactFoam, impactSpray, splashPoints);
+    spillway.add(depthLayer, waterBody, waterSheet, foamVeins, surgeCrests, flowHighlight, leftEdgeFoam, rightEdgeFoam, mixingFoam, impactFoam, impactSpray, pulseRing, splashPoints);
     distantDamGroup.add(spillway);
     damSpillwayFlows.push({
         waterTexture,
         foamTexture,
+        surgeTexture,
         highlightTexture,
         normalTexture,
         depthLayer,
         waterSheet,
         waterBody,
         foamVeins,
+        surgeCrests,
         flowHighlight,
         leftEdgeFoam,
         rightEdgeFoam,
         impactFoam,
         mixingFoam,
         impactSpray,
+        pulseRing,
         splashGeometry,
         splashData,
         phase: flowIndex * 0.83,
         flowSpeed: 1.52 + flowIndex * 0.05,
         foamSpeed: 2.02 + flowIndex * 0.065,
+        surgeSpeed: 1.48 + flowIndex * 0.055,
         highlightSpeed: 2.34 + flowIndex * 0.07
     });
 }
@@ -2983,31 +3481,24 @@ function renderCenterGauge(averageStr = "%--", accentColor = "#138fe8") {
     centerCtx.fillRect(1210, 70, 750, 8);
 
     centerCtx.fillStyle = "#94a3b8";
-    centerCtx.font = "800 32px 'Nunito', 'Segoe UI', sans-serif";
+    centerCtx.font = "900 42px 'Nunito', 'Segoe UI', sans-serif";
     centerCtx.letterSpacing = "1px";
     centerCtx.textAlign = "center";
-    centerCtx.fillText("TOPLAM DOLULUK ORANI", 1585, 175);
+    centerCtx.fillText("TOPLAM DOLULUK ORANI", 1585, 182);
 
     // Dev Yüzde Metni
     centerCtx.fillStyle = accentColor;
-    centerCtx.font = "900 178px 'Nunito', 'Segoe UI', sans-serif";
+    const desiredPercentageSize = 210;
+    centerCtx.font = `900 ${desiredPercentageSize}px 'Nunito', 'Segoe UI', sans-serif`;
+    const percentageWidth = centerCtx.measureText(averageStr).width;
+    const fittedPercentageSize = percentageWidth > 680
+        ? desiredPercentageSize * (680 / percentageWidth)
+        : desiredPercentageSize;
+    centerCtx.font = `900 ${fittedPercentageSize}px 'Nunito', 'Segoe UI', sans-serif`;
     centerCtx.shadowColor = accentColor;
     centerCtx.shadowBlur = 20;
-    centerCtx.fillText(averageStr, 1585, 365);
+    centerCtx.fillText(averageStr, 1585, 420);
     centerCtx.shadowBlur = 0; // reset shadow
-
-    // Durum Hap Rozeti (Status Pill)
-    centerCtx.fillStyle = "rgba(255, 255, 255, 0.08)";
-    centerCtx.beginPath();
-    centerCtx.roundRect(1355, 435, 460, 68, 34);
-    centerCtx.fill();
-    centerCtx.strokeStyle = accentColor;
-    centerCtx.lineWidth = 3;
-    centerCtx.stroke();
-
-    centerCtx.fillStyle = "#ffffff";
-    centerCtx.font = "800 30px 'Nunito', 'Segoe UI', sans-serif";
-    centerCtx.fillText("GENEL REZERV DURUMU", 1585, 480);
 }
 
 function renderCenterComparison(previousAverage, currentAverage, previousYear, currentYear) {
@@ -3072,6 +3563,7 @@ centerGroup.position.set(
 );
 
 // 5 Tanktan Merkez Göstergeye İnce Bağlantı Kılavuz Çizgileri
+const tankGuideLines = [];
 for (let i = 0; i < 5; i++) {
     const tPos = getTankPosition(i);
     const linePoints = [
@@ -3087,6 +3579,7 @@ for (let i = 0; i < 5; i++) {
     });
     const guideLine = new THREE.Line(lineGeom, lineMat);
     scene.add(guideLine);
+    tankGuideLines.push(guideLine);
 }
 
 // ======================================================
@@ -3268,7 +3761,7 @@ const damMetadata = {
         location: "Menderes, İzmir",
         capacityNum: 306650000,
         capacityFormatted: "306.650.000 m³",
-        image: "./arkaplan/fotoblend-dam-7017364_1920.jpg",
+        image: null,
         description: "İzmir'in en büyük içme suyu kaynağı olan Tahtalı Barajı, kentin su ihtiyacının önemli bir bölümünü karşılamaktadır."
     },
     balcova: {
@@ -3277,7 +3770,7 @@ const damMetadata = {
         location: "Balçova, İzmir",
         capacityNum: 7759000,
         capacityFormatted: "7.759.000 m³",
-        image: "./arkaplan/fotoblend-dam-7017364_1920.jpg",
+        image: null,
         description: "Balçova ve Narlıdere çevresine su sağlayan baraj, İzmir'in en stratejik ve köklü içme suyu rezervuarlarındandır."
     },
     gordes: {
@@ -3286,7 +3779,7 @@ const damMetadata = {
         location: "Gördes, Manisa (İzmir İletim Hattı)",
         capacityNum: 453380000,
         capacityFormatted: "453.380.000 m³",
-        image: "./arkaplan/fotoblend-dam-7017364_1920.jpg",
+        image: null,
         description: "Gördes Çayı üzerinde kurulu olan baraj, hem tarımsal sulama hem de kente içme suyu takviyesi sağlar."
     },
     urkmez: {
@@ -3295,7 +3788,7 @@ const damMetadata = {
         location: "Seferihisar, İzmir",
         capacityNum: 8012000,
         capacityFormatted: "8.012.000 m³",
-        image: "./arkaplan/fotoblend-dam-7017364_1920.jpg",
+        image: null,
         description: "Seferihisar ve Ürkmez bölgesinin içme ve sulama suyunu temin eden stratejik bir barajdır."
     },
     alacati: {
@@ -3304,7 +3797,7 @@ const damMetadata = {
         location: "Çeşme, İzmir",
         capacityNum: 16500000,
         capacityFormatted: "16.500.000 m³",
-        image: "./arkaplan/fotoblend-dam-7017364_1920.jpg",
+        image: null,
         description: "Çeşme Yarımadası ve Alaçatı'nın yaz-kış içme suyu ihtiyacını karşılayan temel kaynaktır."
     }
 };
@@ -3538,6 +4031,8 @@ function barajOlustur(x = 0, y = tankY, z = 0, damId = "", damIndex = 0) {
         percentageObject: percentageLabel.object,
         comparison: { group: comparisonGroup, leftWater, rightWater, leftSurface, rightSurface, separator, labelObject: comparisonLabelObject, labelElement: comparisonElement },
         nameElement: nameElement,
+        spotLight: tankSpot,
+        spotTarget: tankSpot.target,
         latestData: null
     };
 }
@@ -3559,6 +4054,59 @@ const barajlar = {
     urkmez: barajOlustur(pos3.x, tankY, pos3.z, "urkmez", 3),
     alacati: barajOlustur(pos4.x, tankY, pos4.z, "alacati", 4)
 };
+
+let compactSceneActive = null;
+
+function kilavuzCizgisiniGuncelle(line, position) {
+    if (!line) return;
+    line.geometry.setFromPoints([
+        new THREE.Vector3(position.x, platformHeight + 0.035, position.z + 1.8),
+        new THREE.Vector3(position.x * 0.55, platformHeight + 0.035, 3.0),
+        new THREE.Vector3(position.x * 0.35, platformHeight + 0.035, 5.0 - centerPanelDepth / 2)
+    ]);
+}
+
+function responsiveSahneDuzeniniGuncelle({ force = false } = {}) {
+    const compact = window.innerWidth <= 700 && window.innerHeight > window.innerWidth;
+    if (!force && compactSceneActive === compact) return;
+    compactSceneActive = compact;
+
+    const positions = compact ? mobileTankPositions : tankPositions;
+    const responsiveTankScale = compact ? MOBILE_TANK_SCALE : TANK_SCALE;
+    Object.values(barajlar).forEach((dam, index) => {
+        const position = positions[index];
+        dam.grup.position.x = position.x;
+        dam.grup.position.y = platformHeight
+            + (TANK_HEIGHT / 2 + PODIUM_HEIGHT / TANK_SCALE) * responsiveTankScale;
+        dam.grup.position.z = position.z;
+        dam.grup.userData.baseScale = responsiveTankScale;
+        dam.grup.userData.currentScale = responsiveTankScale;
+        dam.grup.userData.targetScale = responsiveTankScale;
+        dam.grup.scale.setScalar(responsiveTankScale);
+        dam.spotLight.position.x = position.x;
+        dam.spotLight.position.z = position.z;
+        dam.spotTarget.position.x = position.x;
+        dam.spotTarget.position.y = dam.grup.position.y;
+        dam.spotTarget.position.z = position.z;
+        kilavuzCizgisiniGuncelle(tankGuideLines[index], position);
+    });
+
+    const viewportAspect = Math.max(window.innerWidth / Math.max(window.innerHeight, 1), 0.3);
+    const mobileCameraZ = THREE.MathUtils.clamp(
+        14 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * viewportAspect),
+        74,
+        130
+    );
+    centerGroup.position.z = 9.4;
+    DEFAULT_CAMERA_POS.set(0, compact ? 15.5 : 13.5, compact ? mobileCameraZ : 30.5);
+    DEFAULT_CONTROLS_TARGET.set(0, compact ? 2.2 : 2.8, compact ? -1.0 : 0);
+    camera.position.copy(DEFAULT_CAMERA_POS);
+    controls.target.copy(DEFAULT_CONTROLS_TARGET);
+    camera.lookAt(DEFAULT_CONTROLS_TARGET);
+    controls.update();
+}
+
+responsiveSahneDuzeniniGuncelle({ force: true });
 
 // ======================================================
 // 21. GÜNCEL RESMİ YEDEK VERİLER VE API ÇEKİMİ
@@ -3942,6 +4490,27 @@ function comparisonVisibility(active) {
     });
 }
 
+const comparisonCameraDirection = new THREE.Vector3();
+const comparisonCameraRight = new THREE.Vector3();
+let comparisonLabelsReversed = false;
+
+function karsilastirmaEtiketYonunuGuncelle() {
+    camera.getWorldDirection(comparisonCameraDirection);
+    comparisonCameraRight.crossVectors(comparisonCameraDirection, camera.up).normalize();
+
+    // Kamera tam yandan bakarken iki yarım ekranda neredeyse üst üste gelir.
+    // Küçük bir ölü bölge, sınırda sütunların sürekli yer değiştirmesini önler.
+    let nextReversed = comparisonLabelsReversed;
+    if (comparisonCameraRight.x < -0.08) nextReversed = true;
+    else if (comparisonCameraRight.x > 0.08) nextReversed = false;
+    if (nextReversed === comparisonLabelsReversed) return;
+
+    comparisonLabelsReversed = nextReversed;
+    Object.values(barajlar).forEach((tank) => {
+        tank.comparison.labelElement.classList.toggle("is-view-reversed", nextReversed);
+    });
+}
+
 function yarimSuVerisiniUygula(tank, side, record) {
     const water = side === "left" ? tank.comparison.leftWater : tank.comparison.rightWater;
     const surface = side === "left" ? tank.comparison.leftSurface : tank.comparison.rightSurface;
@@ -4181,6 +4750,48 @@ const modalCompareChange = document.getElementById("modal-compare-change");
 let isModalOpen = false;
 let activeModalDamId = null;
 let trendLoadSequence = 0;
+let barajKonumlariPromise = null;
+
+function ayrintiliKonumMetni(meta) {
+    const geo = meta?.geoLocation;
+    if (!geo?.district || !geo?.neighborhood) return meta?.location || "";
+    return `${geo.neighborhood} Mahallesi, ${geo.district}, İzmir`;
+}
+
+function modalKonumunuGuncelle(damId) {
+    const meta = damMetadata[damId];
+    if (!meta) return;
+    const locationText = ayrintiliKonumMetni(meta);
+    if (modalLocation) modalLocation.textContent = locationText;
+    if (modalDescription) {
+        modalDescription.textContent = meta.geoLocation
+            ? `${meta.description} Konum: ${locationText}.`
+            : meta.description || "";
+    }
+}
+
+async function barajKonumlariniYukle() {
+    if (barajKonumlariPromise) return barajKonumlariPromise;
+    barajKonumlariPromise = fetch("/api/baraj-konumlari", { cache: "no-store" })
+        .then((response) => {
+            if (!response.ok) throw new Error(`Konum API HTTP ${response.status}`);
+            return response.json();
+        })
+        .then((locations) => {
+            Object.entries(locations || {}).forEach(([slug, location]) => {
+                if (damMetadata[slug]) damMetadata[slug].geoLocation = location;
+            });
+            if (isModalOpen && activeModalDamId) modalKonumunuGuncelle(activeModalDamId);
+            return locations;
+        })
+        .catch((error) => {
+            console.warn("Baraj konum bilgileri alınamadı; mevcut konumlar korunuyor.", error?.message || error);
+            return {};
+        });
+    return barajKonumlariPromise;
+}
+
+barajKonumlariniYukle();
 
 function formatDateString(dateStr) {
     if (!dateStr) return "—";
@@ -4408,7 +5019,7 @@ function openDamModal(damId) {
                     modalCompareChange.textContent = "Hesaplanamadı";
                 } else {
                     const change = currentRatio - previousRatio;
-                    modalCompareChange.textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)} puan`;
+                    modalCompareChange.textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)}`;
                     modalCompareChange.classList.add(change >= 0 ? "positive" : "negative");
                 }
             }
@@ -4416,17 +5027,20 @@ function openDamModal(damId) {
     }
 
     modalTitle.textContent = meta.name;
-    modalLocation.textContent = meta.location;
+    modalKonumunuGuncelle(damId);
     modalStatOccupancy.textContent = `%${oran.toFixed(2)}`;
     modalStatOccupancy.style.color = accentColor;
     modalStatCapacity.textContent = meta.capacityFormatted;
     modalStatVolume.textContent = formattedVolume;
     modalStatDate.textContent = formatDateString(data.DURUM_TARIHI);
-    modalDescription.textContent = meta.description || "";
     modalStatusText.textContent = statusText;
     if (modalStatusDot) modalStatusDot.style.backgroundColor = accentColor;
 
-    if (modalBgImage) modalBgImage.style.backgroundImage = `url("${meta.image}")`;
+    if (modalBgImage) {
+        modalBgImage.style.backgroundImage = meta.image
+            ? `url("${meta.image}")`
+            : "radial-gradient(circle at 78% 28%, rgba(73, 183, 232, 0.36), transparent 34%), linear-gradient(135deg, #162735 0%, #183e50 48%, #0c1720 100%)";
+    }
 
     if (modalProgressPercentage) modalProgressPercentage.textContent = `%${oran.toFixed(2)}`;
     if (modalProgressBar) {
@@ -4485,6 +5099,7 @@ const pointer = new THREE.Vector2();
 let pointerDownX = 0;
 let pointerDownY = 0;
 let hoveredDamGroup = null;
+const coarsePointerQuery = window.matchMedia("(hover: none), (pointer: coarse)");
 
 function barajGrubunuBul(object) {
     let current = object;
@@ -4496,7 +5111,7 @@ function barajGrubunuBul(object) {
 }
 
 renderer.domElement.addEventListener("pointermove", (event) => {
-    if (isModalOpen || isResettingView) return;
+    if (isModalOpen || isResettingView || coarsePointerQuery.matches) return;
 
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -4511,7 +5126,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
             renderer.domElement.style.cursor = "pointer";
             if (hoveredDamGroup !== damGroup) {
                 if (hoveredDamGroup) {
-                    hoveredDamGroup.userData.targetScale = TANK_SCALE;
+                    hoveredDamGroup.userData.targetScale = hoveredDamGroup.userData.baseScale;
                     const prevRing = hoveredDamGroup.children.find(c => c.isMesh && c.geometry && c.geometry.type === "RingGeometry");
                     if (prevRing) prevRing.material.opacity = 0.45;
                     if (hoveredDamGroup.userData.percentageElement) {
@@ -4520,7 +5135,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
                     hoveredDamGroup.userData.comparisonElement?.classList.remove("is-hovered");
                 }
                 hoveredDamGroup = damGroup;
-                hoveredDamGroup.userData.targetScale = TANK_SCALE * 1.02;
+                hoveredDamGroup.userData.targetScale = hoveredDamGroup.userData.baseScale * 1.02;
                 const ring = hoveredDamGroup.children.find(c => c.isMesh && c.geometry && c.geometry.type === "RingGeometry");
                 if (ring) ring.material.opacity = 0.90;
                 if (hoveredDamGroup.userData.percentageElement) {
@@ -4533,7 +5148,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
     }
 
     if (hoveredDamGroup) {
-        hoveredDamGroup.userData.targetScale = TANK_SCALE;
+        hoveredDamGroup.userData.targetScale = hoveredDamGroup.userData.baseScale;
         const ring = hoveredDamGroup.children.find(c => c.isMesh && c.geometry && c.geometry.type === "RingGeometry");
         if (ring) ring.material.opacity = 0.45;
         if (hoveredDamGroup.userData.percentageElement) {
@@ -4575,13 +5190,60 @@ renderer.domElement.addEventListener("pointerup", (event) => {
 // 24. EKRAN BOYUTU GÜNCELLEME (RESIZE)
 // ======================================================
 
-window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
+let viewportResizeTimer = null;
+let viewportResizeInProgress = false;
+let lastViewportWidth = window.innerWidth;
+let lastViewportHeight = window.innerHeight;
 
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    labelRenderer.setSize(window.innerWidth, window.innerHeight);
-});
+async function viewportBoyutunuUygula() {
+    if (viewportResizeInProgress) return;
+
+    const width = Math.max(1, Math.round(window.innerWidth));
+    const height = Math.max(1, Math.round(window.innerHeight));
+    if (width === lastViewportWidth && height === lastViewportHeight) return;
+
+    viewportResizeInProgress = true;
+    try {
+        // WebGPU önceki kareyi hâlâ Queue.Submit içinde kullanırken setSize()
+        // çağrılırsa Three.js eski renk dokusunu erkenden yok edebilir. Render
+        // döngüsü aşağıda duraklatılır; daha önce gönderilen işler bittikten sonra
+        // yeni çizim tamponu güvenle oluşturulur.
+        const gpuQueue = renderer.backend?.device?.queue;
+        if (gpuQueue?.onSubmittedWorkDone) {
+            await gpuQueue.onSubmittedWorkDone();
+        }
+
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        // Canvas ilk açılıştaki inline piksel boyutunda kalmamalı. Çizim
+        // tamponuyla birlikte CSS boyutunu da güncelleyerek mobil/masaüstü
+        // geçişlerinde sahnenin tüm viewport'u kaplamasını sağla.
+        renderer.setSize(width, height, true);
+        labelRenderer.setSize(width, height);
+        responsiveSahneDuzeniniGuncelle();
+        lastViewportWidth = width;
+        lastViewportHeight = height;
+    } catch (error) {
+        console.warn("Ekran boyutu güvenli biçimde güncellenemedi.", error);
+    } finally {
+        viewportResizeInProgress = false;
+
+        // GPU kuyruğu beklenirken ekran yeniden değiştiyse yalnızca son ölçüyü
+        // uygula; ara boyutlar için render dokusu oluşturma.
+        if (window.innerWidth !== lastViewportWidth || window.innerHeight !== lastViewportHeight) {
+            clearTimeout(viewportResizeTimer);
+            viewportResizeTimer = setTimeout(viewportBoyutunuUygula, 120);
+        }
+    }
+}
+
+function viewportBoyutlandirmasiniPlanla() {
+    clearTimeout(viewportResizeTimer);
+    viewportResizeTimer = setTimeout(viewportBoyutunuUygula, 120);
+}
+
+window.addEventListener("resize", viewportBoyutlandirmasiniPlanla, { passive: true });
+window.visualViewport?.addEventListener("resize", viewportBoyutlandirmasiniPlanla, { passive: true });
 
 // ======================================================
 // 25. ANA RENDER DÖNGÜSÜ (RÜZGÂR + SENKRON RESET LERP + CLOUDS)
@@ -4595,12 +5257,28 @@ function animate(timestamp) {
     const delta = timer.getDelta();
     const elapsed = timer.getElapsed();
 
-    // Rezervuarın tek su yüzeyinde çok düşük hızlı, sakin normal-map akışı.
-    reservoirNormalTexture.offset.x = (elapsed * 0.0025) % 1;
-    reservoirNormalTexture.offset.y = (elapsed * 0.0014) % 1;
+    // İki farklı yöndeki hareket su yüzeyini sakin tutarken rüzgârın yönünü
+    // görünür kılar. Parıltılar normal dalgalarından biraz daha hızlı kayar.
+    reservoirNormalTexture.offset.x = (elapsed * 0.012) % 1;
+    reservoirNormalTexture.offset.y = (elapsed * 0.0065) % 1;
+    reservoirGlintTexture.offset.x = (elapsed * 0.0105) % 1;
+    reservoirGlintTexture.offset.y = (elapsed * 0.0042) % 1;
+    reservoirGlintMaterial.opacity = 0.17 + Math.sin(elapsed * 0.72) * 0.035;
+    reservoirWaterMat.roughness = 0.14 + Math.sin(elapsed * 0.42) * 0.012;
+    reservoirWaterMat.clearcoatRoughness = 0.19 + Math.cos(elapsed * 0.38) * 0.018;
+
+    for (const wave of reservoirShoreWaves) {
+        const pulse = 0.5 + 0.5 * Math.sin(elapsed * wave.speed + wave.phase);
+        const outwardScale = 1 + pulse * (0.0015 + wave.opacity * 0.0024);
+        wave.mesh.scale.setScalar(outwardScale);
+        wave.material.opacity = wave.opacity * (0.42 + pulse * 0.58);
+        wave.waveTexture.offset.x = (elapsed * 0.0045 * wave.speed + wave.phase * 0.07) % 1;
+        wave.waveTexture.offset.y = (elapsed * 0.0022 * wave.speed + wave.phase * 0.05) % 1;
+    }
     for (const flow of damSpillwayFlows) {
         flow.waterTexture.offset.y = (flow.waterTexture.offset.y - delta * flow.flowSpeed) % 1;
         flow.foamTexture.offset.y = (flow.foamTexture.offset.y - delta * flow.foamSpeed) % 1;
+        flow.surgeTexture.offset.y = (flow.surgeTexture.offset.y - delta * flow.surgeSpeed) % 1;
         flow.highlightTexture.offset.y = (flow.highlightTexture.offset.y - delta * flow.highlightSpeed) % 1;
         flow.highlightTexture.offset.x = 0.08 + Math.sin(elapsed * 0.72 + flow.phase) * 0.035;
         flow.normalTexture.offset.y = (flow.normalTexture.offset.y - delta * 0.72) % 1;
@@ -4634,6 +5312,13 @@ function animate(timestamp) {
         flow.mixingFoam.material.opacity = 0.54 + foamPulse * 0.065 + foamRipple * 0.025;
         flow.impactSpray.scale.set(1.02 + foamPulse * 0.075, 1.02 + Math.abs(foamPulse) * 0.11, 1.0);
         flow.impactSpray.material.opacity = 0.57 + Math.abs(foamPulse) * 0.14;
+
+        // 1.15 saniyelik döngü; halka büyürken hızla saydamlaşır. Faz farkı
+        // dört savağın tek bir mekanik animasyon gibi görünmesini engeller.
+        const ringProgress = (elapsed * 0.87 + flow.phase * 0.29) % 1;
+        const ringScale = 1.0 + ringProgress * 1.85;
+        flow.pulseRing.scale.set(1.35 * ringScale, 2.25 * ringScale, 1);
+        flow.pulseRing.material.opacity = Math.pow(1 - ringProgress, 1.45) * 0.62;
 
         const splashPositions = flow.splashGeometry.attributes.position;
         for (let i = 0; i < flow.splashData.length; i++) {
@@ -4838,9 +5523,13 @@ function animate(timestamp) {
         controls.update();
     }
 
+    karsilastirmaEtiketYonunuGuncelle();
+
     // 7. Render
-    renderer.render(scene, camera);
-    labelRenderer.render(scene, camera);
+    if (!viewportResizeInProgress) {
+        renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+    }
 }
 
 renderer.setAnimationLoop(animate);

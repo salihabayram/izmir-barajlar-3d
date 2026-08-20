@@ -4,8 +4,10 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const IZSU_API_URL = "https://izsu.gov.tr/api/proxy/DamWaterStatus/WithInfoList";
 const IZSU_SOURCE_URL = "https://izsu.gov.tr/bilgi-merkezi/barajlar/su-durumu";
+const IZMIR_GOLLER_API_URL = "https://openapi.izmir.bel.tr/api/ibb/cbs/goller";
 const CACHE_TTL_MS = Number(process.env.BARAJ_CACHE_TTL_MS) || 15 * 60 * 1000;
 const HISTORY_CACHE_TTL_MS = 60 * 60 * 1000;
+const LOCATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const BARAJ_ENDPOINTLERI = Object.freeze({
     tahtali: "tahtali",
@@ -18,6 +20,7 @@ const BARAJ_ENDPOINTLERI = Object.freeze({
 const tarihCache = new Map();
 const devamEdenIstekler = new Map();
 let resmiSayfaCache = null;
+let barajKonumCache = null;
 
 app.use(express.static(__dirname));
 
@@ -48,6 +51,52 @@ function barajSlugunuBul(name) {
     if (key.includes("gordes")) return "gordes";
     if (key.includes("alacati") || key.includes("kutluaktas")) return "alacati";
     return null;
+}
+
+function turkceBaslik(value) {
+    return String(value || "")
+        .trim()
+        .toLocaleLowerCase("tr-TR")
+        .replace(/(^|[\s-])\p{L}/gu, (letter) => letter.toLocaleUpperCase("tr-TR"));
+}
+
+async function barajKonumlariniGetir() {
+    if (barajKonumCache && Date.now() - barajKonumCache.zaman < LOCATION_CACHE_TTL_MS) {
+        return barajKonumCache.veri;
+    }
+
+    try {
+        const response = await fetch(IZMIR_GOLLER_API_URL, {
+            headers: {
+                Accept: "application/json",
+                "User-Agent": "3DBaraj/2.0 (Izmir open data reader)"
+            },
+            signal: AbortSignal.timeout(15000)
+        });
+        if (!response.ok) throw new Error(`İzmir Açık Veri API HTTP ${response.status} döndürdü.`);
+
+        const payload = await response.json();
+        const locations = {};
+        for (const item of Array.isArray(payload?.onemliyer) ? payload.onemliyer : []) {
+            const slug = barajSlugunuBul(item?.ADI);
+            if (!slug || !BARAJ_ENDPOINTLERI[slug] || locations[slug]) continue;
+            locations[slug] = {
+                slug,
+                name: String(item.ADI || "").trim(),
+                district: turkceBaslik(item.ILCE),
+                neighborhood: turkceBaslik(item.MAHALLE),
+                latitude: Number(item.ENLEM),
+                longitude: Number(item.BOYLAM),
+                source: IZMIR_GOLLER_API_URL
+            };
+        }
+
+        barajKonumCache = { zaman: Date.now(), veri: locations };
+        return locations;
+    } catch (error) {
+        if (barajKonumCache) return barajKonumCache.veri;
+        throw error;
+    }
 }
 
 function isoTarih(value) {
@@ -316,7 +365,17 @@ async function trendEndpointi(req, res) {
 }
 
 app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, apiVersion: 2, trend: true, historicalDates: true });
+    res.json({ ok: true, apiVersion: 2, trend: true, historicalDates: true, locations: true });
+});
+
+app.get("/api/baraj-konumlari", async (_req, res) => {
+    try {
+        const locations = await barajKonumlariniGetir();
+        res.set("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+        res.json(locations);
+    } catch (error) {
+        res.status(502).json({ hata: error.message });
+    }
 });
 
 app.get("/api/trend/:slug", trendEndpointi);
@@ -331,5 +390,6 @@ module.exports = {
     izsudanBarajlariGetir,
     izsuKaydiniDonustur,
     izsuSayfaVerisiniAyikla,
-    trendVerisiniGetir
+    trendVerisiniGetir,
+    barajKonumlariniGetir
 };
